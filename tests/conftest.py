@@ -1,8 +1,7 @@
 """Shared fixtures and hardware detection.
 
-Some of these tests need real hardware: a microphone, or an interactive desktop
-that can receive injected keystrokes. Those cannot run on a CI runner, so they
-are skipped rather than failed, and the skip reason says which piece is missing.
+Tests needing a microphone or an interactive desktop cannot run on CI, so they
+skip with a reason naming the missing piece.
 """
 
 import sys
@@ -25,13 +24,7 @@ def has_input_device() -> bool:
 
 
 def has_interactive_desktop() -> bool:
-    """
-    True if injected keystrokes can reach a real desktop.
-
-    GetProcessWindowStation/GetUserObjectInformation would be the rigorous
-    check; in practice a CI runner has no interactive session and setting the
-    CI environment variable is the reliable signal.
-    """
+    """True if injected keystrokes can reach a real desktop. CI runners cannot."""
     import os
     if os.environ.get("CI"):
         return False
@@ -39,17 +32,10 @@ def has_interactive_desktop() -> bool:
 
 
 def casper_is_running() -> bool:
-    """
-    True if a Casper Flow instance already holds the single-instance mutex.
+    """True if a Casper Flow instance holds the single-instance mutex.
 
-    This matters for the keyboard tests. They inject real Caps Lock events, and a
-    running app installs its own suppressing hook on the same key, so both hooks
-    receive every injected event and compete over whether to swallow it. The
-    result is ambiguous, and it also makes the app react to the test suite -
-    visible in casper.log as bursts of "Hold too short (0.00s)", which is
-    keyboard.send() delivering key-down and key-up back to back. Its replay flag
-    is per-process, so it hides those events from the test's own hook but not
-    from the app's.
+    Its suppressing hook on Caps Lock competes with the keyboard tests' own hook
+    over every injected event, making the outcome ambiguous.
     """
     if sys.platform != "win32":
         return False
@@ -89,15 +75,10 @@ def repo_root() -> Path:
 
 @pytest.fixture(scope="session")
 def tk_root():
-    """
-    One hidden Tk root for the whole test session.
+    """One hidden Tk root for the whole session.
 
-    Only one Tk root can exist per process. Creating a second fails with
-    "Can't find a usable tk.tcl", and destroying one breaks any created
-    afterwards with "invalid command name tcl_findLibrary" - which is how the
-    settings-window tests started breaking the wizard tests. Both windows accept
-    a `master`, so they attach to this root as Toplevels instead of making their
-    own.
+    Only one root can exist per process, and destroying one breaks any created
+    afterwards. Both windows accept a `master` and attach here as Toplevels.
     """
     tk = pytest.importorskip("tkinter")
     try:
@@ -106,5 +87,5 @@ def tk_root():
         pytest.skip(f"no usable Tk: {e}")
     root.withdraw()
     yield root
-    # Deliberately not destroyed: the process is about to exit anyway, and tearing
-    # down the last root is what causes the failures described above.
+    # Not destroyed: tearing down the last root breaks anything created later, and
+    # the process is about to exit anyway.

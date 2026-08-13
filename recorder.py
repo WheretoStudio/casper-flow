@@ -1,14 +1,10 @@
 """
 Microphone recorder.
 
-Captures from the default (or configured) input device with sounddevice and
-writes a temp 16-bit WAV for the transcription backend.
-
-Notes:
-  * A hard cap (`max_record_seconds`) stops a stuck hotkey from growing the
-    frame buffer until the process runs out of memory.
-  * Peak level is logged so a muted or wrong input device is diagnosable from
-    casper.log instead of looking like "transcription is broken".
+Captures from the default (or configured) input device with sounddevice and writes
+a temp 16-bit WAV for the transcription backend. Frames arrive on the PortAudio
+callback thread; the pipeline and the overlay read them under _lock.
+max_record_seconds caps the buffer so a stuck hotkey cannot exhaust RAM.
 """
 
 import logging
@@ -25,26 +21,16 @@ log = logging.getLogger("casper.recorder")
 # int16 peak below this is effectively silence (~ -46 dBFS)
 _SILENCE_PEAK = 160
 
-# Recordings go in one directory we own rather than loose in %TEMP%. That is what
-# makes sweep_recordings() safe: it can delete the directory's contents outright
-# instead of pattern-matching filenames in a directory full of other apps' files.
+# Ours alone, so sweep_recordings() can clear it without touching other apps.
 RECORDING_DIR = Path(tempfile.gettempdir()) / "casper-flow"
 
 
 def sweep_recordings() -> int:
     """
-    Delete every leftover recording. Returns how many were removed.
-
-    A leftover is a WAV of the user's voice sitting on disk indefinitely, which on
-    a tool whose entire promise is that your voice stays private is a defect rather
-    than untidiness. The normal path deletes each recording as soon as the text is
-    produced, but three things bypass it: an unhandled error between writing the
-    WAV and deleting it, the tray's `os._exit(0)` on Quit - which by design runs no
-    `finally` block anywhere in the process - and losing power mid-dictation.
-
-    Safe to call at startup because the single-instance mutex guarantees no other
-    instance is mid-dictation, and safe on quit because the pipeline has already
-    released anything it was holding.
+    Delete every leftover recording (each a WAV of the user's voice) and return the
+    count. The pipeline deletes its own, but the tray's os._exit(0), an unhandled
+    error and power loss all skip that. Safe at startup: the single-instance mutex
+    rules out another live dictation.
     """
     if not RECORDING_DIR.is_dir():
         return 0
@@ -54,8 +40,7 @@ def sweep_recordings() -> int:
             leftover.unlink()
             removed += 1
         except Exception as e:
-            # Locked by a pipeline that is still running, most likely. It will
-            # delete it itself, and the next sweep catches it otherwise.
+            # Usually locked by a running pipeline, which deletes it itself.
             log.debug(f"Could not delete leftover recording: {e}")
     if removed:
         log.info(f"Deleted {removed} leftover recording(s) from a previous run")
@@ -79,20 +64,12 @@ class AudioRecorder:
         self._overflowed = False
         self._total = 0
 
-        # Creating a PortAudio InputStream costs 1250-1450 ms on this class of
-        # hardware, measured, and it costs that *every* time - closing and
-        # reopening does not get cheaper. Starting an already-created stream
-        # costs ~0 ms. So the stream is created once and then started and
-        # stopped per dictation, which is the difference between capturing your
-        # words and capturing nothing.
-        #
-        # This is safe: a created-but-stopped stream delivers no callbacks and
-        # captures no audio. Verified - 0 frames over a second while stopped,
-        # frames only after .start().
+        # Creating a PortAudio InputStream costs 1250-1450 ms every time; starting
+        # an existing one is free. Create once, start/stop per dictation. A
+        # created-but-stopped stream delivers no callbacks and captures nothing.
         self._keep_open = bool(cfg.get("keep_mic_open", True))
 
-        # Smoothed input level, 0.0-1.0, for the on-screen meter. Written from
-        # the audio callback and read by the UI; a plain float assignment is
+        # Written from the audio callback, read by the UI. A float assignment is
         # atomic enough for a display hint and keeps the callback lock-free.
         self._level = 0.0
         self._started_at = 0.0
@@ -137,17 +114,13 @@ class AudioRecorder:
 
     def _callback(self, indata, frames, time_info, status):
         """
-        Runs on the PortAudio thread for every audio block.
-
-        Installed once when the stream is created, so it must decide for itself
-        whether a dictation is in progress rather than being wired up per
-        recording.
+        Runs on the PortAudio thread for every audio block. Installed once at
+        stream creation, not per recording, so it checks self.recording itself.
         """
         if status:
             log.warning(f"Sounddevice status: {status}")
 
-        # Meter first, outside the lock: cheap, and we want it to keep
-        # updating even once the max-duration cap stops storing audio.
+        # Outside the lock, so the meter keeps moving once the cap stops storing.
         try:
             peak = float(np.abs(indata).max())
             inst = min(1.0, peak / 9000.0)     # ~ -11 dBFS reads as full
@@ -203,26 +176,16 @@ class AudioRecorder:
     @property
     def is_ready(self) -> bool:
         """
-        True once there is an input stream to capture into.
-
-        The hotkey is armed before this becomes true, because opening the device
-        was measured at 14.6 s on this machine - a cold USB microphone or an
-        exclusive-mode driver can be far slower than the 1.3 s the comments here
-        used to assume. Waiting for it before arming left the app deaf for that
-        whole period while the tray icon claimed it was running, so Caps Lock
-        behaved like Caps Lock and the user got a stray capitals toggle instead
-        of a dictation. The caller checks this and says so instead.
+        True once there is a stream to capture into. main.py arms the hotkey first,
+        since a cold USB mic or exclusive-mode driver can take 15 s to open, and
+        reports any press that beats it.
         """
         return self._stream is not None
 
     def warmup(self) -> bool:
         """
-        Create the input stream ahead of the first dictation.
-
-        This is the whole reason the first press used to lose its audio: stream
-        creation takes over a second, it happened on the hot path, and the
-        release arrived before capture had begun. Nothing is recorded here - the
-        stream is created and left stopped.
+        Create the stream ahead of the first dictation: creation takes over a
+        second, which on the hot path costs the start of the phrase. Left stopped.
         """
         return self._ensure_stream()
 
@@ -265,11 +228,8 @@ class AudioRecorder:
 
         self._pause_stream()
 
-        # Why this dictation produced nothing, in words a non-coder can act on.
-        # These three paths used to return None with only a line in casper.log, so
-        # a muted microphone looked identical to a broken hotkey: the user holds
-        # the key, talks, nothing appears, and nothing says why. The caller reads
-        # this and shows it.
+        # Set on each None path below; main.py shows it, since a muted mic and a
+        # dead hotkey look identical to the user.
         self.last_failure = None
 
         if not was_recording:
@@ -309,12 +269,7 @@ class AudioRecorder:
         return self._write_wav(audio)
 
     def snapshot(self):
-        """
-        Audio captured so far, as float32 mono, for the live preview.
-
-        Returns None when there is not yet enough audio to be worth
-        transcribing.
-        """
+        """Audio so far as float32 mono, or None below 0.6 s (not worth a pass)."""
         with self._lock:
             if not self.recording or not self._frames:
                 return None
@@ -328,17 +283,9 @@ class AudioRecorder:
 
     def discard(self) -> bool:
         """
-        Stop and throw the audio away (used for too-short taps).
-
-        Returns True if the audio being thrown away contained speech.
-
-        That return value is the difference between a mystery and a message. A
-        hold under `min_hold_seconds` is discarded in silence, which is correct
-        for an ordinary Caps Lock tap - nobody wants a notification for using
-        their own key. But it is the wrong answer when the user held the key,
-        spoke a short phrase, and released: from their side they dictated and
-        nothing appeared, with no way to learn that a threshold exists. The
-        caller uses this to tell those two cases apart.
+        Stop and throw the audio away (too-short taps). Returns True if it held
+        speech; main.py stays silent for a plain tap and explains min_hold_seconds
+        otherwise.
         """
         with self._lock:
             self.recording = False
@@ -352,8 +299,7 @@ class AudioRecorder:
         if frames:
             try:
                 audio = np.concatenate(frames, axis=0)
-                # Same threshold stop() uses to call a recording silent, and long
-                # enough to be a syllable rather than a click or a desk knock.
+                # 0.2 s is a syllable rather than a click or a desk knock.
                 had_speech = (int(np.abs(audio).max()) >= _SILENCE_PEAK
                               and len(audio) >= int(0.2 * self.sample_rate))
             except Exception as e:
@@ -375,11 +321,9 @@ class AudioRecorder:
 
     def _pause_stream(self):
         """
-        Stop capturing without destroying the stream.
-
-        Keeping it means the next dictation starts in ~0 ms instead of paying
-        the 1.3 s creation cost again. A stopped stream delivers no callbacks,
-        so no audio is captured between dictations.
+        Stop capturing without destroying the stream, so the next dictation skips
+        the 1.3 s creation cost. A stopped stream delivers no callbacks, so nothing
+        is captured between dictations.
         """
         if not self._stream:
             return
@@ -417,7 +361,7 @@ class AudioRecorder:
                 wf.setsampwidth(2)   # int16
                 wf.setframerate(self.sample_rate)
                 wf.writeframes(audio.tobytes())
-            # DEBUG: this names a file containing the user's voice.
+            # DEBUG only: names a file containing the user's voice.
             log.debug(f"WAV written to {wav_path}")
             log.info(f"Recording written, {audio.shape[0] / self.sample_rate:.1f}s")
             return wav_path

@@ -4,48 +4,13 @@ Put the speech models in models/ so a release build can bundle them.
     venv\\Scripts\\python.exe fetch_models.py            # assemble everything
     venv\\Scripts\\python.exe fetch_models.py --verify   # check, change nothing
     venv\\Scripts\\python.exe fetch_models.py --lock     # re-record the lock file
+    venv\\Scripts\\python.exe fetch_models.py --pack     # build the release zip
 
-**Why this exists.** Casper Flow ships as one file that installs with the network
-unplugged, which means every model has to be inside the installer. They were,
-but they got there by two different accidents: `models/swift-ct2` happened to
-exist on one laptop, and `base.en` was copied out of whatever the HuggingFace
-cache held. `models/` is gitignored, nothing in the repository could regenerate
-it, and the conversion command lived in a comment. So exactly one machine in the
-world could build a release, and nobody could check that the weights in a release
-were the weights the accuracy figures were measured on.
-
-**We host the weights ourselves.** They come from a release asset on our own
-repository, so a normal build reaches no third party. They cannot live in the
-repository as ordinary files - git blocks anything over 100 MiB and
-base.en/model.bin is 138 MB - and Git LFS would charge a monthly bandwidth quota
-against every clone. Release assets have neither a size nor a bandwidth cap, and
-are what GitHub documents for distributing binaries.
-
-What *is* in git is `models/MODELS.lock.json`: the upstream repository, the exact
-revision, the quantisation, and a SHA-256 for every file. It verifies the download
-and it means the weights can be rebuilt from source if the upstream models ever
-matter again.
-
-**The user downloads one file and nothing else** - the installer, with both models
-inside it. This script runs on a build machine, before PyInstaller, and changes
-nothing about the install.
-
-Three routes, in the order they are tried:
-
-  bundle      one zip from our own release. The normal path, and the only one a
-              contributor needs: no HuggingFace, no torch, no conversion.
-  download    an upstream model already in CTranslate2 format, fetched as-is.
-              This is `base.en`.
-  convert     an upstream model published as transformers weights, converted
-              locally. This is `swift-ct2`, and it needs torch and transformers -
-              about 440 MB, used once.
-
-The last two exist to *create* the bundle and to bootstrap a new weight version.
-Maintainer flow when the weights change:
-
-    python fetch_models.py --from-source     # rebuild from upstream
-    python fetch_models.py --lock            # record the fingerprints
-    python fetch_models.py --pack            # build the zip, prints the gh command
+Weights come from a zip attached to a release on our own repository. Sizes and
+SHA-256s are recorded in models/MODELS.lock.json, which build_installer.ps1 reads
+so it can refuse to ship weights that do not match. The per-model download and
+convert routes exist to build that zip and to bootstrap a new weight version;
+conversion needs torch and transformers, which are not in requirements.txt.
 """
 
 import argparse
@@ -65,16 +30,11 @@ LOCK_FILE = MODELS_DIR / "MODELS.lock.json"
 
 # --------------------------------------------------------------- our own bundle
 #
-# The models are hosted by us, as a release asset on our own repository. Nothing
-# in a normal build reaches a third party.
-#
-# It has to be a release asset rather than a file in the repository: git refuses
-# files over 100 MiB outright and base.en/model.bin is 138 MB, and Git LFS would
-# bill a monthly bandwidth quota for every clone. Release assets have no size or
-# bandwidth cap and are what GitHub documents for distributing binaries.
+# A release asset rather than a file in the repository: git refuses files over
+# 100 MiB and base.en/model.bin is 138 MB.
 #
 # Bump TAG when the weights change. The tag is part of the URL, so an old build
-# keeps fetching exactly the bytes it was built against.
+# keeps fetching the bytes it was built against.
 MODEL_BUNDLE = {
     "repo": "wheretostudio/casper-flow",
     "tag": "models-v1",
@@ -147,8 +107,7 @@ def pack(names: list[str], lock: dict) -> int:
     """
     Build the release asset from what is in models/. Maintainer step.
 
-    This is how the bundle everyone else downloads gets made. Run it once after
-    establishing or changing the weights, then attach the result to a release.
+    Run it after changing the weights, then attach the result to a release.
     """
     problems = verify(names, lock)
     if problems:
@@ -162,9 +121,8 @@ def pack(names: list[str], lock: dict) -> int:
     archive = out / MODEL_BUNDLE["asset"]
     print(f"Packing {len(names)} model(s) into {archive.name}\n")
 
-    # ZIP_STORED, not DEFLATE: model.bin is quantised weights and compresses by a
-    # percent or two, so deflating it costs minutes of CPU on both sides for
-    # nothing. The installer compresses the payload later anyway.
+    # ZIP_STORED, not DEFLATE: quantised weights compress by a percent or two, so
+    # deflating costs minutes of CPU on both sides. The installer compresses later.
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_STORED) as z:
         for name in names:
             for path in sorted((MODELS_DIR / name).rglob("*")):
@@ -177,8 +135,8 @@ def pack(names: list[str], lock: dict) -> int:
     size = archive.stat().st_size
     print(f"\n{archive}  ({size / 1e6:.1f} MB)")
     print(f"sha256  {sha256(archive)}")
-    # Backtick continuations: this project is Windows-only and the shell is
-    # PowerShell, where a trailing backslash is not a line continuation.
+    # Backtick continuations: the shell is PowerShell, where a trailing backslash
+    # is not one.
     print("\nPublish it:\n")
     print(f"    gh release create {MODEL_BUNDLE['tag']} `")
     print(f"        \"{archive}\" `")
@@ -195,9 +153,8 @@ def do_bundle(names: list[str]) -> bool:
     """
     Fetch every model at once from our own release asset.
 
-    The fast path, and the only one a contributor should ever need: one download,
-    no HuggingFace, no torch, no conversion. Returns False if the asset is not
-    published yet, so the caller can fall back to building it from source.
+    Returns False if the asset is not published yet, so the caller can fall back
+    to building it from source.
     """
     url = bundle_url()
     tmp = MODELS_DIR / f".{MODEL_BUNDLE['asset']}.part"
@@ -225,9 +182,8 @@ def do_bundle(names: list[str]) -> bool:
 
     print("  extracting")
     with zipfile.ZipFile(tmp) as z:
-        # Guard against a path escaping models/. The archive is ours, but a
-        # zip that writes outside its target directory is the classic way an
-        # archive extraction turns into arbitrary file overwrite.
+        # A member that writes outside its target directory is the classic route
+        # from archive extraction to arbitrary file overwrite.
         for member in z.namelist():
             target = (MODELS_DIR / member).resolve()
             if not target.is_relative_to(MODELS_DIR.resolve()):
@@ -244,9 +200,8 @@ def do_download(name: str, spec: dict, revision: str | None) -> str:
     target = MODELS_DIR / name
     print(f"  downloading {spec['repo']}"
           + (f" at {revision[:12]}" if revision else " (latest)"))
-    # local_dir gives real files rather than symlinks into the shared cache, which
-    # matters because PyInstaller follows what it is given and a symlinked payload
-    # is not portable.
+    # local_dir gives real files rather than symlinks into the shared cache;
+    # PyInstaller follows what it is given and a symlinked payload is not portable.
     path = snapshot_download(
         repo_id=spec["repo"],
         revision=revision,
@@ -404,9 +359,8 @@ def main() -> int:
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     print(f"Assembling {len(names)} model(s) into {MODELS_DIR}\n")
 
-    # Our own release asset first. One download, no third party, no torch. The
-    # per-model paths below exist to *create* this asset, and to bootstrap a new
-    # weight version - they are not the normal route.
+    # Our own release asset first. The per-model paths below exist to create that
+    # asset and to bootstrap a new weight version, not as the normal route.
     already = all(is_complete(MODELS_DIR / n) for n in names)
     if not args.from_source and not (already and not args.force):
         print(f"Bundle from {MODEL_BUNDLE['repo']} release "

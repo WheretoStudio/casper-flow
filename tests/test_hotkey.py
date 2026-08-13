@@ -1,18 +1,10 @@
 """Caps Lock must still work as Caps Lock.
 
-Reported symptom: "i holded caps lock key but its blinking, and even i just
-clicked and caps lock is not getting on ... my caps lock key as well isnt
-working". The hook swallowed every press unconditionally, so binding the key
-removed it from the system for as long as the app ran.
+A press shorter than the threshold is handed back so the key toggles; a longer
+press dictates without touching the toggle.
 
-Two things are verified: a press shorter than the threshold is handed back so the
-key toggles, and a longer press dictates without touching the toggle.
-
-The injected keystroke must come from keybd_event with a REAL scan code. The
-keyboard package flags its own send()/press() events and its hook skips them, so
-using that API here would silently test nothing - which it did on the first
-attempt. And bScan=0 makes the package fall back to -vk, which does not match
-the scan code the suppression hook is registered under.
+Keystrokes come from keybd_event with a real scan code. The keyboard package's
+hook skips its own send() events, and bScan=0 misses the hook's scan code.
 """
 
 import ctypes
@@ -40,18 +32,9 @@ def wait_until(predicate, timeout: float = 10.0, poll: float = 0.05) -> bool:
     """
     True as soon as `predicate()` holds, or False at the deadline.
 
-    These tests inject real keystrokes and then check what the OS did with them,
-    which is not instantaneous: the replay happens on a worker thread after a
-    grace period, and the whole suite runs on two cores alongside tests that open
-    Tk windows. A fixed sleep long enough to be reliable there is a guess, and the
-    guess failed intermittently. Waiting for the condition asserts exactly the same
-    thing without the guess.
-
-    The timeout is generous on purpose. It is not a performance assertion - these
-    tests are about whether Caps Lock still works, not how fast. A tight deadline
-    turns a slow machine into a red build: this suite ran in 47 s early in a session
-    and 310 s at the end of one, on the same two cores, and a 3 s deadline started
-    failing at the slow end while the behaviour was unchanged.
+    The replay lands on a worker thread after a grace period, so a fixed sleep is
+    a guess. The generous timeout is not a performance assertion: the same suite
+    has run in 47 s and in 310 s on these two cores.
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -147,11 +130,8 @@ class TestCapsLockSurvives:
         assert "dictate" not in listener.events
 
     def test_repeated_taps_do_not_wedge_the_listener(self, listener):
-        """
-        The replayed keystroke can come back through our own hook. If it were
-        mistaken for a real press, _held would stick True and every later
-        dictation would be ignored as auto-repeat until restart.
-        """
+        """A replayed keystroke read as a real press leaves _held stuck True, so
+        every later dictation is ignored as auto-repeat."""
         for _ in range(3):
             press_caps(0.08)
             time.sleep(SETTLE)
@@ -166,18 +146,9 @@ class TestCapsLockSurvives:
 
 
 class TestReplayGuard:
-    """
-    Suppressing a key means the app has to hand back the taps it swallows, or
-    binding Caps Lock removes Caps Lock from the machine. The replay guard exists
-    so the app does not then mistake its own injected tap for a real keypress.
-
-    Driven directly rather than by injecting keystrokes, because the guard's
-    semantics are what matter here and injection is what makes the tests above
-    slow and desktop-dependent.
-    Driven directly rather than by injecting keystrokes: the integration tests
-    above inject, which makes them sensitive to everything else happening on the
-    desktop, and timing logic is exactly what a busy desktop tests least reliably.
-    """
+    """The app hands back the taps it swallows, and must not read its own injected
+    tap as a real press. Driven directly, since a busy desktop is the least
+    reliable way to test timing logic."""
 
     @staticmethod
     def _listener():
@@ -205,13 +176,8 @@ class TestReplayGuard:
         assert hk._replay_pending == 0
 
     def test_exactly_the_events_we_injected_are_let_through(self):
-        """
-        The guard passes our own events to the app and swallows nothing else. A
-        guard that consumed too many would eat the user's next real press; one that
-        consumed too few would let a replayed tap start a dictation, which is the
-        failure mode that killed two attempts to shorten this window - see the
-        comment on _REPLAY_GRACE in hotkey.py.
-        """
+        """Consuming too many eats the user's next real press; too few lets a
+        replayed tap start a dictation. See _REPLAY_GRACE in hotkey.py."""
         hk = self._listener()
         hk._replay_pending = 2
         hk._replay_deadline = time.monotonic() + 10

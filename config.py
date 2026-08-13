@@ -27,9 +27,8 @@ SETTINGS_FILE = ROOT / "settings.json"
 WHISPER_RATE = 16000
 
 # Machine-specific overrides, applied on top of settings.json and never
-# committed. This is how a converted local model or a tuned hotkey can be used
-# without editing the file that ships as everyone's default. .gitignore has
-# referred to this file for some time; until now nothing read it.
+# committed. Lets a converted local model or a tuned hotkey be used without
+# editing the file that ships as everyone's default.
 LOCAL_SETTINGS_FILE = ROOT / "settings.local.json"
 ENV_FILE = ROOT / ".env"
 
@@ -40,26 +39,22 @@ DEFAULTS = {
     # A single key ("caps lock", "right ctrl", "f8") or a combo
     # ("ctrl+space", "ctrl+alt+d"). Hold it to record.
     #
-    # Caps Lock is the default: one key, comfortable to hold with the left
-    # little finger, present on every Windows keyboard, and nothing else uses
-    # it as a hold. While Casper Flow runs its toggle is suppressed, so it will not
-    # turn your typing uppercase.
+    # Caps Lock is present on every Windows keyboard and nothing else uses it as
+    # a hold. Its toggle is suppressed while Casper Flow runs.
     #
-    # Note that Scroll Lock, Pause and F13-F24 are missing from most laptops,
-    # and the Fn key is handled in keyboard firmware so no software on any OS
-    # can bind it. Run pick_hotkey.py to confirm what your keyboard sends.
+    # Scroll Lock, Pause and F13-F24 are absent from most laptops. Fn is handled
+    # in keyboard firmware and emits no scan code, so it cannot be bound. Run
+    # pick_hotkey.py to see what your keyboard actually sends.
     "hotkey": "caps lock",
     # Stop the trigger key doing its normal job while Casper Flow is holding it.
     # Only applied when the full combo matches, so a plain space still types.
     "suppress_hotkey": True,
     # How long the hotkey must be held before the press counts as dictation.
-    # A shorter press is thrown away and the keystroke is handed back to
-    # Windows, so tapping Caps Lock still toggles Caps Lock.
+    # A shorter press is discarded and the keystroke is replayed, so tapping
+    # Caps Lock still toggles Caps Lock.
     #
-    # This is a commitment threshold, not a delay: the microphone starts
-    # capturing the moment you press, so nothing you say is lost. Raising this
-    # makes accidental dictation harder, at the cost of making genuinely short
-    # dictations impossible - hold for less than this and you get nothing.
+    # A commitment threshold, not a delay: capture starts on key-down, so
+    # nothing said is lost. Anything held for less than this yields no text.
     "min_hold_seconds": 2.0,
     # Safety ceiling: if the key still looks held after this long, assume the
     # release event was lost and end the hold. Only used when suppress_hotkey
@@ -67,45 +62,29 @@ DEFAULTS = {
     "max_hold_seconds": 120,
 
     # -- Privacy --------------------------------------------------------
-    # When true, every backend that would send audio or text off this machine
-    # is refused, whatever else the config says. This is the default and the
-    # whole point of the project: your voice never leaves the device.
-    #
-    # Enforced centrally in transcribe.py and llm_polish.py rather than by
-    # convention, so a stray setting cannot quietly start uploading audio.
-    # Localhost services such as Ollama remain allowed.
+    # Refuse every backend that would send audio or text off this machine,
+    # whatever else the config says. Enforced in transcribe.py and llm_polish.py
+    # rather than by convention. Localhost services such as Ollama stay allowed.
     "offline_only": True,
 
     # -- Transcription backend ------------------------------------------
     # "local"  -> faster-whisper, fully offline (the only option that runs
     #             under offline_only)
-    # "groq" / "openai" -> cloud APIs. Blocked unless you deliberately set
-    #             offline_only to false.
+    # "groq" / "openai" -> cloud APIs, blocked while offline_only is true
     "transcribe_backend": "local",
 
     # faster-whisper model.
     #
-    # "swift-ct2" is a Hinglish fine-tune, converted for CTranslate2 and shipped
-    # inside the installer. It is the default because code-switched speech is what
-    # this product exists for.
+    # "swift-ct2" is a Hinglish fine-tune converted for CTranslate2 and bundled
+    # in the installer. "base.en" is also bundled and is much better on pure
+    # English. Neither is usable for the other's job, which is why Settings >
+    # Language offers both rather than picking one; see corpus/RESULTS.md.
     #
-    # Measured on the 30-recording corpus (corpus/RESULTS.md), accuracy as
-    # 1 - fair WER:
-    #
-    #                  code-switch   english   hindi    median
-    #   swift-ct2          81.0%      62.4%    68.9%    1.29 s
-    #   base.en             6.6%      91.1%     0.0%    1.12 s
-    #
-    # Those two rows are why there are two profiles rather than one default: each
-    # model is very bad at the other one's job, and no single bundled model is
-    # good at both. Pick with Settings > Language, which writes this key. If you
-    # only ever dictate English, "base.en" is the better choice by a wide margin.
-    #
-    # Other values are HuggingFace model names, downloaded on first use:
+    # Other values are HuggingFace names, downloaded on first use:
     #   tiny      fastest, adequate for short commands
     #   base      multilingual, general-purpose
     #   small     more accurate, ~3x slower
-    #   large-v3  far too slow on a 2-core CPU; use the Groq backend instead
+    #   large-v3  too slow on a 2-core CPU; use the Groq backend instead
     "whisper_model": "swift-ct2",
     "whisper_device": "cpu",          # "cpu" or "cuda"
     "whisper_compute_type": "int8",   # int8 / float16 / float32
@@ -113,62 +92,36 @@ DEFAULTS = {
     "cpu_threads": 0,
     # Beam search width. 1 is greedy.
     #
-    # **This used to be 1, on the stated grounds that higher was "slower for no
-    # measurable accuracy gain". Re-measured on the corpus, that was wrong.**
-    # Accuracy as 1 - fair WER, with timestamps on, over 30 recordings
-    # (corpus/ACCURACY.md):
-    #
-    #                  overall   code-switch   english   hindi   names
-    #   beam_size 1     65.6%       79.6%       62.4%    88.9%   44.8%
-    #   beam_size 5     68.1%       82.7%       64.7%    88.9%   51.4%
-    #
-    # Two and a half points overall, six on proper nouns, and it is what keeps the
-    # published 81% code-switch figure true rather than optimistic.
-    #
-    # It is not free: median latency went from 1.94 s to 2.89 s on a two-core
-    # laptop, which is the one setting here with a cost the user can feel. Lower it
-    # to 1 if you would rather have the speed - the text stays usable, it just
-    # misses more proper nouns.
+    # 5 buys ~2.5 points of overall accuracy and ~6 on proper nouns over greedy,
+    # and costs about a second of median latency on a two-core CPU
+    # (corpus/ACCURACY.md). Drop to 1 for speed; the text stays usable but misses
+    # more names.
     "beam_size": 5,
 
     # Dictation language as an ISO code, or null to detect it per recording.
     #
-    # Pinned to "en", and that is correct for the bundled Hinglish model even
-    # though you dictate Hindi words to it. Measured on the corpus, "en" was
-    # accuracy-identical to auto-detect in every category and 46% faster, because
-    # detection spent over a second per phrase concluding "en" anyway. Whisper
-    # treats romanised Hinglish as English, which is what the fine-tune produces.
+    # "en" is right for the bundled Hinglish model even when dictating Hindi
+    # words: Whisper treats romanised Hinglish as English, which is what the
+    # fine-tune emits. Pinning it is accuracy-neutral and 46% faster than
+    # auto-detect, which spends a second per phrase concluding "en" anyway.
     #
-    # Set it to null only on a general-purpose model (base, small) that you feed
-    # both languages. On those, pinning is actively harmful in both directions:
-    # "en" mangles Hindi into English-sounding nonsense ("kal ek meeting hai" ->
-    # "the luck meeting"), and "hi" mangles plain English ("are you listening to
-    # me" -> "Arri Uresan enthume hai kya").
+    # Use null on a general-purpose model (base, small) fed both languages. There
+    # pinning corrupts both directions: "en" turns "kal ek meeting hai" into "the
+    # luck meeting", "hi" turns plain English into transliterated nonsense.
     "language": "en",
 
-    # Vocabulary hint, supplied to the decoder as preceding context. It biases
-    # spelling and script, which helps with Hinglish.
+    # Vocabulary hint supplied to the decoder as preceding context, biasing
+    # spelling and script.
     #
-    # Deliberately a COMMA-SEPARATED WORD LIST, not sentences. Whisper treats
-    # this as text it was already transcribing and will happily continue it, so
-    # a prompt made of full sentences gets parroted back as your transcript
-    # whenever the audio is unclear: a sentence-shaped prompt here caused
-    # "Aaj ka update ready hai kya?" to be pasted for unrelated English speech.
-    # A word list gives similar vocabulary bias with far less to copy, and
-    # transcribe.py separately detects and rejects any leakage that still
-    # occurs.
+    # Must be a comma-separated word list, never sentences. Whisper treats this
+    # as text it was already transcribing and will continue it, so a
+    # sentence-shaped prompt gets pasted verbatim whenever the audio is unclear.
+    # transcribe.leaked_prompt() catches what gets through.
     #
-    # **The shipped settings.json sets this to null, deliberately, and that is
-    # the configuration the measurements describe.** On the bundled Hinglish
-    # model the prompt made things worse: code-switch accuracy fell, latency rose
-    # 39%, and there was no overall gain, because a model already trained on
-    # Hinglish does not need priming towards it. It stays here as the recommended
-    # starting point for anyone switching to a general-purpose model (base,
-    # small), where priming does help, and because bench_hinglish.py scores it as
-    # one of its configurations.
-    #
-    # If you do turn it on, add your own jargon, product names and colleagues'
-    # names to the list. Keep it a comma-separated word list, not sentences.
+    # settings.json ships this as null: on the bundled Hinglish model priming
+    # lowered code-switch accuracy and added 39% latency, a model already trained
+    # on Hinglish needing no push towards it. Kept here as the starting point for
+    # general-purpose models, where it does help, and as a bench_hinglish.py case.
     "initial_prompt": (
         "Hinglish: kal, aaj, abhi, thoda, matlab, theek hai, meeting, report, "
         "bhej dena, kar dena, ho gaya, chahiye, office, update, client."
@@ -177,10 +130,9 @@ DEFAULTS = {
     # Load the local model at startup instead of on first dictation.
     "preload_model": True,
 
-    # Model used for the live caption only. Smaller than whisper_model on
-    # purpose: previews run repeatedly while you talk, so they must be quick.
-    # The pasted text never comes from this model. Set to null to reuse
-    # whisper_model instead of loading a second one.
+    # Model for the live caption only; keep it smaller than whisper_model, since
+    # previews run repeatedly while you talk. Pasted text never comes from this
+    # model. null reuses whisper_model rather than loading a second one.
     "preview_model": None,
 
     # Cloud transcription model IDs.
@@ -207,9 +159,8 @@ DEFAULTS = {
     # "openai" | "anthropic" | "groq" -> cloud. Blocked under offline_only.
     "llm_backend": "rules",
     "llm_model": "gpt-4o-mini",
-    # Interjections removed by the "rules" backend. Deliberately short: a
-    # dictation tool must never delete words that carry meaning, so ambiguous
-    # ones ("like", "matlab", "actually") are left alone.
+    # Interjections removed by the "rules" backend. Kept short: ambiguous words
+    # ("like", "matlab", "actually") can carry meaning and are left alone.
     "filler_words": ["um", "uh", "uhh", "umm", "uhm", "er", "erm", "hmm",
                      "mmm", "ahh"],
     # Hard ceiling on the polish call. If it takes longer we paste raw text
@@ -220,58 +171,48 @@ DEFAULTS = {
     "ollama_model": "llama3",
 
     # -- Formatting -----------------------------------------------------
-    # How the finished text is laid out. This is the one part of the pipeline
-    # that is allowed to write words the user did not say, so both settings here
-    # are off by default and neither does anything without a local language
-    # model.
+    # How the finished text is laid out. The only part of the pipeline allowed to
+    # write words the user did not say, so both settings default to off and
+    # neither does anything without a generative backend.
     #
-    #   plain    cleanup only. Exactly the behaviour with these settings absent.
-    #   message  short, with bullets *if the speech actually listed things*.
-    #   email    greeting, paragraphs, numbered steps where speech enumerated.
+    #   plain    cleanup only
+    #   message  short, with bullets only where the speech listed things
+    #   email    greeting, paragraphs, numbered steps where speech enumerated
     #
-    # Chosen explicitly rather than inferred from the focused window. Guessing
-    # that you are writing an email and silently reformatting a sentence is worse
-    # than asking once, and a wrong guess is invisible until you have sent it.
+    # Set explicitly rather than inferred from the focused window: a wrong guess
+    # is invisible until the message has been sent.
     "format_mode": "plain",
-    #
-    # Grammar repair. Separate from format_mode because the risks differ: a
-    # layout change is obvious when it is wrong, a changed tense or a swapped
-    # negation is not. Requires a generative backend.
+    # Grammar repair. Separate from format_mode because a bad layout change is
+    # obvious and a swapped tense or negation is not.
     "grammar_fix": False,
 
     # -- Audio ----------------------------------------------------------
-    # Fixed, not a preference: Whisper accepts 16 kHz mono only. Anything else is
-    # resampled before it reaches the model, and since PyAV was removed from the
-    # build that resampling is worse than what the audio driver already does.
-    # validate() pins this back to WHISPER_RATE if it is changed.
+    # Fixed, not a preference: Whisper accepts 16 kHz mono only, and _validate()
+    # pins this back to WHISPER_RATE if it is changed.
     "sample_rate": WHISPER_RATE,
     "channels": 1,
     # null = system default input device. Can be an index or a name substring.
     "input_device": None,
     # -- Corrections ----------------------------------------------------
-    # Proper nouns are the weakest category measured: 44.8% accuracy against
-    # 81.0% for code-switched speech in general. No speech model has heard of
-    # your colleagues, so this is fixed by telling the app your words rather
-    # than by downloading a bigger model.
+    # Proper nouns are the weakest category measured, at roughly half the accuracy
+    # of code-switched speech generally. No speech model has heard of your
+    # colleagues, so the fix is naming them here rather than a bigger model.
     #
-    # vocabulary: names, companies and jargon. Matched by sound, not spelling,
-    # so one entry catches the variants - "Sharma" also fixes "sarma".
+    # Names, companies and jargon, matched case-insensitively against the
+    # transcript.
     "vocabulary": [],
-    # corrections: an explicit "heard this, meant that" mapping, applied first
-    # and exactly. For when the same mistake keeps appearing.
+    # Explicit "heard this, meant that" pairs, applied first and exactly, for a
+    # mistake that keeps recurring:
     #   "corrections": {"thank you office": "Bangalore office"}
     "corrections": {},
 
     # Safety cap so a stuck key can't eat all your RAM.
     "max_record_seconds": 300,
-    # Create the microphone stream once and reuse it, instead of opening it on
-    # every dictation. Opening costs ~1.3 s (measured) and paying that on the
-    # hotkey press meant the microphone went live after the key was already
-    # released, so short dictations recorded nothing at all.
-    #
-    # A stopped stream captures no audio - verified, zero frames while stopped.
-    # Set this to false if you would rather the device be released the instant a
-    # dictation ends, and accept the delay on the next one.
+    # Open the microphone stream once and reuse it. Opening costs ~1.3 s, which
+    # paid on the hotkey press would put the mic live after the key was already
+    # released. A stopped stream captures nothing, so this does not listen when
+    # idle. Set false to release the device between dictations and accept the
+    # delay on the next one.
     "keep_mic_open": True,
 
     # -- On-screen overlay ----------------------------------------------
@@ -299,16 +240,13 @@ DEFAULTS = {
     # -- Misc -----------------------------------------------------------
     "launch_at_login": False,
 
-    # Set to true once the first-run wizard has been completed. Until then the
-    # wizard opens on startup, because a user who has installed the app and does
-    # not know which key to hold has not been onboarded, only installed to.
+    # Set once the first-run wizard has completed. Until then it opens on startup.
     "setup_complete": False,
 }
 
-# Settings that settings.local.json is currently forcing to a different value than
-# settings.json asked for. Populated by load_config, read by doctor.py. Not part of
-# the config dict, because it describes the configuration rather than being part of
-# it - and anything in that dict risks being written back out by save_config.
+# Settings that settings.local.json is forcing to a different value than
+# settings.json asked for. Populated by load_config, read by doctor.py. Kept out
+# of the config dict so save_config cannot write it back out.
 LOCAL_OVERRIDES: list[str] = []
 
 # Keys that come from .env, never written back to settings.json
@@ -319,11 +257,9 @@ def _strip_value(val: str) -> str:
     """
     Strip whitespace, surrounding quotes and an unquoted trailing comment.
 
-    The comment handling matters: `GROQ_API_KEY=abc123 # work key` otherwise
-    yields a key with " # work key" attached, and the resulting authentication
-    failure looks exactly like a wrong key. Only unquoted values are treated this
-    way, because a quoted value is explicit about where it ends and "#" is a legal
-    character inside one.
+    Without the comment handling, `GROQ_API_KEY=abc123 # work key` yields a key
+    with the comment attached and fails authentication as though it were simply
+    wrong. Quoted values are left alone: "#" is legal inside one.
     """
     val = val.strip()
     if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
@@ -372,16 +308,10 @@ def _validate(cfg: dict) -> dict:
     else:
         cfg["llm_backend"] = lb
 
-    # Whisper accepts 16 kHz mono and nothing else, so recording at any other
-    # rate means resampling before transcription. That used to be free: audio was
-    # handed to faster-whisper as a file path and PyAV resampled it on the way in.
-    # PyAV is no longer in the build - it was 62.6 MB of FFmpeg to read a WAV we
-    # wrote ourselves - and the replacement resamples by linear interpolation,
-    # which is measurably worse than FFmpeg's.
-    #
-    # So rather than quietly do a worse job at a setting that never had a reason
-    # to be changed, the setting is pinned. sounddevice already asks the device for
-    # 16 kHz and lets the driver convert, which is where that conversion belongs.
+    # Whisper accepts 16 kHz mono only, so any other rate needs resampling, and
+    # with PyAV out of the build the in-process fallback is linear interpolation.
+    # Pinned rather than resampled badly: sounddevice asks the device for 16 kHz
+    # and lets the driver convert, which is where that belongs.
     rate = cfg.get("sample_rate", WHISPER_RATE)
     if rate != WHISPER_RATE:
         log.warning(
@@ -395,8 +325,8 @@ def _validate(cfg: dict) -> dict:
         ("channels", 1, 2),
         ("max_record_seconds", 5, 3600),
         ("llm_timeout_seconds", 1, 300),
-        # Above ~10s every realistic dictation would be discarded, which reads
-        # as "the hotkey does nothing" rather than as a setting.
+        # Above ~10s every realistic dictation is discarded, which presents as
+        # the hotkey doing nothing.
         ("min_hold_seconds", 0.0, 10.0),
         ("max_hold_seconds", 5, 3600),
     ):
@@ -427,9 +357,8 @@ def _validate(cfg: dict) -> dict:
     cfg["format_mode"] = mode
     cfg["grammar_fix"] = bool(cfg.get("grammar_fix", False))
 
-    # Both features are generative, and the default cleanup backend cannot
-    # generate. Rather than fail silently at dictation time - the user would see
-    # unformatted text and have no idea why - say so once, here, at load.
+    # Both features are generative and the default cleanup backend is not, which
+    # would otherwise present as unformatted text with no explanation.
     if (mode != "plain" or cfg["grammar_fix"]) and \
             str(cfg.get("llm_backend", "rules")).lower() == "rules":
         log.warning(
@@ -460,8 +389,8 @@ def _validate(cfg: dict) -> dict:
         device = "cpu"
     cfg["whisper_device"] = device
 
-    # An unsupported value here fails the model load on every dictation, and the
-    # fallback path cannot rescue it because it is not a missing-model problem.
+    # An unsupported value fails the model load on every dictation, and the
+    # missing-model fallback cannot rescue it.
     ctype = str(cfg.get("whisper_compute_type",
                         DEFAULTS["whisper_compute_type"])).lower()
     if ctype not in ("int8", "int8_float16", "int8_float32", "int16",
@@ -498,8 +427,8 @@ def _validate(cfg: dict) -> dict:
             v = DEFAULTS[key]
         cfg[key] = v
 
-    # Both are individually in range and nonsensical together: every dictation
-    # would be discarded as too short before it could ever be too long.
+    # Individually in range, nonsensical together: every dictation would be
+    # discarded as too short before it could ever be too long.
     if cfg["min_hold_seconds"] >= cfg["max_hold_seconds"]:
         log.warning(
             f"min_hold_seconds={cfg['min_hold_seconds']} is not less than "
@@ -509,8 +438,8 @@ def _validate(cfg: dict) -> dict:
         cfg["min_hold_seconds"] = DEFAULTS["min_hold_seconds"]
         cfg["max_hold_seconds"] = DEFAULTS["max_hold_seconds"]
 
-    # A string here would be iterated character by character, so "um" would strip
-    # every standalone "u" and "m" from the transcript.
+    # A bare string would be iterated per character, stripping every standalone
+    # "u" and "m" from the transcript.
     fillers = cfg.get("filler_words")
     if fillers is not None and not isinstance(fillers, (list, tuple)):
         log.warning(
@@ -519,8 +448,8 @@ def _validate(cfg: dict) -> dict:
         )
         cfg["filler_words"] = list(DEFAULTS["filler_words"])
 
-    # An English-only model cannot produce Hindi. Warn rather than silently
-    # giving someone unusable Hinglish output.
+    # An English-only model cannot produce Hindi, and the output is unusable
+    # rather than merely worse.
     model = str(cfg.get("whisper_model", ""))
     if model.endswith(".en") and cfg.get("initial_prompt"):
         log.warning(
@@ -534,9 +463,8 @@ def _strip_comments(data):
     """
     Drop "//" keys.
 
-    JSON has no comment syntax, and a settings file that cannot explain itself
-    gets edited badly. A "//" key is the conventional workaround, so it is
-    treated as a comment rather than reported as an unrecognised setting.
+    JSON has no comment syntax, so the shipped settings.json documents itself
+    with "//" keys. They are comments, not unrecognised settings.
     """
     if not isinstance(data, dict):
         return data
@@ -562,9 +490,8 @@ def load_config() -> dict:
             log.warning(f"Could not parse settings.json ({e}); using defaults")
     else:
         try:
-            # A frozen build ships a settings.json inside the bundle. Prefer
-            # copying that over writing DEFAULTS, so the file the user first sees
-            # is the documented one with its comments intact.
+            # Prefer the settings.json inside the frozen bundle over dumping
+            # DEFAULTS, so the first file the user sees keeps its "//" comments.
             shipped = resource_file("settings.json")
             if shipped.exists() and shipped != SETTINGS_FILE:
                 SETTINGS_FILE.write_text(
@@ -589,12 +516,10 @@ def load_config() -> dict:
                 log.warning(
                     f"Unrecognised settings.local.json keys (ignored): {unknown}"
                 )
-            # Which of these actually change a value, as opposed to restating it.
-            # Those are the ones that make the Settings window appear broken: it
-            # writes settings.json, this file is applied afterwards and wins, so
-            # the setting silently reverts and nothing says why. Recorded as a
-            # WARNING for exactly that reason - it was an INFO line listing every
-            # key including the no-ops, which is easy to read past.
+            # Only the keys that actually change a value, not those restating it.
+            # These are what make the Settings window look broken: it writes
+            # settings.json, this file is applied afterwards and wins, so the
+            # setting reverts with nothing to explain why. Hence WARNING.
             pinned = sorted(k for k in set(local) & set(DEFAULTS)
                             if cfg.get(k) != local[k])
             cfg.update(local)
@@ -638,12 +563,11 @@ def save_config(cfg: dict):
     """
     Persist non-secret settings back to settings.json.
 
-    Written to a temporary file and then moved into place. `write_text` truncates
-    first, so an error or a power cut between truncate and write left a
-    half-written file - which `load_config` then failed to parse and silently
-    replaced with the defaults, losing the user's hotkey, vocabulary and
-    corrections. `os.replace` is atomic on Windows, so the file on disk is either
-    the old settings or the new ones.
+    Written to a temp file and moved into place. write_text truncates first, so
+    an interrupted write leaves a file load_config cannot parse and replaces with
+    the defaults, losing the user's hotkey, vocabulary and corrections.
+    os.replace is atomic on Windows: the file is either the old settings or the
+    new ones.
     """
     out = {k: cfg[k] for k in DEFAULTS if k in cfg and k not in SECRET_KEYS}
     tmp = SETTINGS_FILE.with_suffix(".json.tmp")

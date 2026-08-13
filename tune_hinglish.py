@@ -1,11 +1,9 @@
 """
 Find the speech settings that work best for YOUR voice.
 
-Accent matters enormously for code-mixed Hindi-English, and no amount of
-guessing substitutes for a recording of the actual speaker. This records one
-short phrase, runs it through every sensible combination of model, language and
-prompt, scores each against what you actually said, and offers to save the
-winner.
+Accent matters a great deal for code-mixed Hindi-English. This records one short
+phrase, runs it through every sensible combination of model, language and prompt,
+scores each against what you said, and offers to save the winner.
 
     venv\\Scripts\\python.exe tune_hinglish.py
 
@@ -23,8 +21,7 @@ from pathlib import Path
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
 # Transcripts may come back in Devanagari, which the console's default code page
-# (cp1252 on most Windows installs) cannot encode - printing one would otherwise
-# raise UnicodeEncodeError and abort the comparison mid-run.
+# cannot encode - printing one would raise UnicodeEncodeError and abort the run.
 for _stream in (sys.stdout, sys.stderr):
     try:
         if _stream is not None:
@@ -40,31 +37,19 @@ SAMPLE = ROOT / "_tune_sample.wav"
 
 PHRASE = "Kal ek meeting hai, please report bhej dena aaj shaam tak"
 
-# The prompt under test is the one the app actually ships, imported rather than
-# copied so the two cannot drift apart.
-#
-# This used to be a separate, sentence-shaped prompt:
-#
-#   "Kal ek meeting hai. Please report bhej dena. Main office se nikal
-#    raha hoon. Aaj ka update ready hai kya? Thoda check karke bata dena."
-#
-# Whisper treats initial_prompt as text it has already transcribed and will
-# happily continue it when the audio is unclear. That exact prompt caused a real
-# bug: "Aaj ka update ready hai kya?" was pasted into a document during
-# unrelated English dictation. Worse, this script offered to save that prompt
-# into settings.json, so accepting its recommendation reintroduced the bug. A
-# comma-separated word list primes the same vocabulary with no sentence to
-# continue.
+# Imported from config.DEFAULTS rather than copied, so the app's prompt and the one
+# scored here cannot drift apart; tests/test_privacy.py asserts they match. It must
+# stay a comma-separated word list: Whisper continues a sentence-shaped prompt when
+# the audio is unclear, and this script offers to write the prompt to settings.json.
 from config import DEFAULTS as _APP_DEFAULTS      # noqa: E402
 
 WORD_LIST_PROMPT = _APP_DEFAULTS["initial_prompt"]
 
 # (model, language, use_prompt)
 #
-# The language pins are included because they are informative, not because they
-# are candidates: "en" turned "kal ek meeting hai" into "the luck meeting", and
-# "hi" turned "are you listening to me" into "Arri Uresan enthume hai kya".
-# Seeing that happen on your own voice is more convincing than being told.
+# The language pins are informative rather than candidates: "en" turns "kal ek
+# meeting hai" into "the luck meeting", "hi" turns "are you listening to me" into
+# "Arri Uresan enthume hai kya".
 CONFIGS = [
     ("base",  None, True),      # the shipped default
     ("base",  None, False),     # control: how much is the prompt worth?

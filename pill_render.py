@@ -1,13 +1,11 @@
 """
 Frame rendering for the Casper Flow status overlay.
 
-Pure drawing, no windowing: every function here takes state and returns an
-RGBA PIL image, which makes the look easy to tweak or test in isolation.
+Pure drawing, no windowing: every function takes state and returns an RGBA PIL
+image, so the look can be tweaked or tested in isolation.
 
-The "blob" style is an organic morphing shape with a soft halo, live waveform
-bars inside it, and a grey waveform trailing off to both sides. Smooth edges
-and the halo need true per-pixel alpha, which is why pill.py composites these
-frames through a layered window rather than drawing with tkinter primitives.
+Smooth edges and the halos need per-pixel alpha, which is why pill.py composites
+these frames through a layered window rather than with tkinter primitives.
 """
 
 from __future__ import annotations
@@ -46,8 +44,8 @@ OUTER_BAR = (196, 200, 206)     # grey side waveform
 
 PALETTES = {"recording": RECORDING, "transcribing": TRANSCRIBING, "error": ERROR}
 
-# Supersampling factor. 2 is the sweet spot: visibly smooth, still fast enough
-# to render every frame on a laptop CPU.
+# Supersampling factor. 2 is smooth enough and still renders every frame on a
+# laptop CPU.
 SS = 2
 
 
@@ -73,7 +71,7 @@ def _gradient(size: tuple[int, int], pal: dict) -> Image.Image:
     hit = _grad_cache.get(ckey)
     if hit is not None:
         return hit
-    # Stored as RGBA so callers can .copy() instead of paying a convert().
+    # RGBA so callers can .copy() instead of paying a convert().
     img = _build_gradient(size, pal).convert("RGBA")
     _grad_cache[ckey] = img
     return img
@@ -106,9 +104,8 @@ def _build_gradient(size: tuple[int, int], pal: dict) -> Image.Image:
 def _blob_points(cx: float, cy: float, r: float, t: float,
                  harmonics, n: int = 132) -> list[tuple[float, float]]:
     """
-    Organic closed outline: a circle whose radius is modulated by a few sine
-    harmonics that drift at different speeds, so the shape never repeats
-    exactly and reads as 'alive' rather than mechanical.
+    Organic closed outline: a circle whose radius is modulated by sine harmonics
+    drifting at different speeds, so the shape never repeats exactly.
     """
     pts = []
     for i in range(n):
@@ -151,11 +148,8 @@ def _rounded_bar(d: ImageDraw.ImageDraw, cx: float, cy: float,
 
 def _bar_heights(fs: FrameState, count: int, seed_phase: float) -> list[float]:
     """
-    Per-bar 0-1 heights.
-
-    Driven by the real input level so it responds to your voice, with a small
-    per-bar oscillation so it still breathes during quiet passages instead of
-    collapsing to a flat line.
+    Per-bar 0-1 heights, driven by the live input level with a small per-bar
+    oscillation so quiet passages do not collapse to a flat line.
     """
     lvl = max(0.0, min(1.0, fs.level))
     out = []
@@ -181,20 +175,18 @@ def render_blob(size: tuple[int, int], fs: FrameState) -> Image.Image:
 
     cx, cy = w * 0.5, h * 0.52
     base_r = min(w, h) * 0.335
-    # Gentle breathing, plus a nudge from the live level
+    # Breathing, plus a nudge from the live level
     pulse = 1.0 + 0.030 * math.sin(fs.t * 2.4) + 0.070 * max(0.0, min(1.0, fs.level))
     r = base_r * pulse
 
     # ---- grey side waveform (behind everything) -----------------------
     _draw_side_waveform(img, fs, cx, cy, r, w, h)
 
-    # ---- glow + translucent companion shapes, in ONE mask -------------
-    # Compositing full-size RGBA layers is the expensive part, so everything
-    # tinted with the halo colour is accumulated into a single L mask and
-    # composited once.
-    # Every blurred layer is built at reduced resolution and scaled up.
-    # Gaussian blur dominated the profile (40% of frame time), and blurring a
-    # quarter of the pixels is ~4x cheaper for output that is soft by design.
+    # ---- glow + translucent companion shapes, in one mask -------------
+    # Compositing full-size RGBA layers dominates frame time, so everything
+    # tinted with the halo colour accumulates into one L mask, blurred at half
+    # resolution and scaled up. The output is soft by design, so the loss of
+    # detail is free and the blur costs a quarter of the pixels.
     QW, QH = w // 2, h // 2
     soft = Image.new("L", (QW, QH), 0)
     sd = ImageDraw.Draw(soft)
@@ -221,12 +213,11 @@ def render_blob(size: tuple[int, int], fs: FrameState) -> Image.Image:
     ImageDraw.Draw(mask).polygon(
         _blob_points(cx, cy, r, fs.t, _HARMONICS_MAIN), fill=255
     )
-    # Just enough blur to antialias the polygon and soften the facets between
-    # harmonic lobes, without looking out of focus.
+    # Enough blur to antialias the polygon and soften the facets between lobes.
     mask = mask.filter(ImageFilter.GaussianBlur(radius=1.1 * SS))
 
-    # Draw the sheen and the inner waveform straight onto the gradient, then
-    # composite the whole body once using the blob mask.
+    # Sheen and inner waveform go straight onto the gradient, so the body is
+    # composited once through the blob mask.
     body = _gradient((w, h), pal).copy()
 
     sheen = Image.new("L", (QW, QH), 0)
@@ -248,19 +239,18 @@ def render_blob(size: tuple[int, int], fs: FrameState) -> Image.Image:
             # a travelling wave rather than a level meter
             ph = math.sin(fs.t * 5.0 - i * 0.9)
             bh = 0.34 + 0.60 * (0.5 + 0.5 * ph)
-        # Capped so a loud passage cannot push the bars past the blob edge,
-        # where they would clip into a flat line.
+        # Capped at 1.20r so a loud passage cannot push bars past the blob edge,
+        # where the mask would clip them into a flat line.
         _rounded_bar(bd, start + i * gap, cy, bw, r * 1.20 * bh,
                      pal["bars"] + (225,))
 
     body.putalpha(mask)
     img = Image.alpha_composite(img, body)
 
-    # ---- little rising dots ------------------------------------------
     _draw_dots(img, fs, cx, cy, r, pal)
 
     # BOX is an exact area average at integer downscale factors: as clean as
-    # LANCZOS here and appreciably faster.
+    # LANCZOS here and faster.
     return img.resize((W, H), Image.BOX)
 
 
@@ -275,20 +265,20 @@ def _draw_side_waveform(img: Image.Image, fs: FrameState,
     gap = bw * 2.5
     inner_edge = r * 0.88
     max_h = h * 0.46
-    # Fill the width available on each side rather than a fixed count.
+    # Fills the width available on each side rather than a fixed count.
     n = max(4, int(((w * 0.5) - inner_edge) / gap))
 
     for i in range(n):
-        # newest nearest the blob, so the waveform appears to march outward
+        # newest nearest the blob, so the waveform marches outward
         idx = len(hist) - 1 - i
         lvl = hist[idx] if 0 <= idx < len(hist) else 0.0
         fade = 1.0 - (i / n)
-        # Fade to nothing before the frame edge so the waveform dissolves
-        # instead of being cut off.
+        # Reaches zero before the frame edge, so the waveform dissolves rather
+        # than being cut off.
         alpha = int(235 * (fade ** 1.7))
         if alpha <= 3:
             continue
-        # a little idle motion so it isn't dead flat when silent
+        # idle motion so it is not dead flat when silent
         idle = 0.16 + 0.10 * (0.5 + 0.5 * math.sin(fs.t * 3.0 + i * 0.9))
         bh = max_h * (idle + 0.85 * lvl) * (0.55 + 0.45 * fade)
         off = inner_edge + gap * i
@@ -318,13 +308,10 @@ def _draw_dots(img: Image.Image, fs: FrameState,
 
 # ----------------------------------------------------------- capsule style
 
-# Nirmala UI comes first because it covers Devanagari as well as Latin, so
-# Hinglish renders in a single font. Segoe UI has no Devanagari coverage at all
-# and would draw .notdef boxes for every Hindi character.
-#
-# Note that Pillow here is built without Raqm/HarfBuzz, so there is no complex
-# text shaping. Nirmala still renders ordinary Devanagari correctly; unusual
-# conjuncts may be imperfect. Roman-script output (the default) avoids the issue.
+# Nirmala UI first: it covers Devanagari as well as Latin, so Hinglish renders in
+# one font. Segoe UI has no Devanagari coverage and draws .notdef boxes instead.
+# Pillow here is built without Raqm/HarfBuzz, so there is no complex shaping;
+# ordinary Devanagari is fine, unusual conjuncts may not be.
 _FONT_CANDIDATES = (
     ("Nirmala.ttc", 1),        # semibold
     ("Nirmala.ttc", 0),
@@ -385,7 +372,6 @@ def render_capsule(size: tuple[int, int], fs: FrameState) -> Image.Image:
     card = [pad, pad, w - pad, h - pad]
     radius = (card[3] - card[1]) / 2.0
 
-    # drop shadow
     sh = Image.new("L", (w // 2, h // 2), 0)
     ImageDraw.Draw(sh).rounded_rectangle(
         [card[0] / 2, (card[1] + 5 * SS) / 2, card[2] / 2, (card[3] + 6 * SS) / 2],
@@ -420,7 +406,6 @@ def render_capsule(size: tuple[int, int], fs: FrameState) -> Image.Image:
     rr = base * pulse
     d.ellipse([dot_x - rr, cy - rr, dot_x + rr, cy + rr], fill=pal["core"] + (255,))
 
-    # label
     label = LABELS.get(fs.state, fs.state.title())
     f = _font(int(12.5 * SS))
     d.text((card[0] + 44 * SS, cy), label, font=f, fill=(238, 240, 245, 255),
@@ -443,7 +428,6 @@ def render_capsule(size: tuple[int, int], fs: FrameState) -> Image.Image:
             _rounded_bar(d, mx + gap * i, cy, bw, (h * 0.30) * bh,
                          pal["hot"] + (225,))
 
-    # timer
     secs = int(fs.elapsed)
     d.text((card[2] - 20 * SS, cy), f"{secs // 60}:{secs % 60:02d}",
            font=_font(int(11 * SS)), fill=(150, 156, 168, 255), anchor="rm")
@@ -478,10 +462,8 @@ _MARGIN = 26
 
 def _pill_sprite(pw: int, ph: int, state: str) -> Image.Image:
     """
-    The pill itself: glow, shadow, gradient body, top highlight and hairline
-    border, drawn once per (size, state) and cached.
-
-    Everything here is static, and rebuilding it per frame cost 27 ms.
+    Glow, shadow, gradient body, top highlight and hairline border. All static,
+    and 27 ms to build, so it is cached per (size, state).
     """
     key = (pw, ph, state)
     hit = _sprite_cache.get(key)
@@ -499,8 +481,8 @@ def _pill_sprite(pw: int, ph: int, state: str) -> Image.Image:
     mask = Image.new("L", (W, H), 0)
     ImageDraw.Draw(mask).rounded_rectangle(box, radius=r, fill=255)
 
-    # Restrained coloured glow. The previous version used a wide, strong blur
-    # that read as a smudge on a dark desktop rather than as light.
+    # Tight coloured glow: a wider, stronger blur reads as a smudge on a dark
+    # desktop rather than as light.
     gw, gh = max(1, W // 4), max(1, H // 4)
     glow = Image.new("L", (gw, gh), 0)
     ImageDraw.Draw(glow).rounded_rectangle(
@@ -511,7 +493,7 @@ def _pill_sprite(pw: int, ph: int, state: str) -> Image.Image:
     g.putalpha(glow.resize((W, H), Image.BILINEAR))
     img = Image.alpha_composite(img, g)
 
-    # Neutral drop shadow for physical separation from the desktop.
+    # Neutral drop shadow, for separation from the desktop.
     sw, sh_ = max(1, W // 3), max(1, H // 3)
     sh = Image.new("L", (sw, sh_), 0)
     ImageDraw.Draw(sh).rounded_rectangle(

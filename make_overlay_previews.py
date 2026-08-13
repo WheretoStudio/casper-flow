@@ -3,20 +3,12 @@ Render the real overlay to PNGs for the website.
 
     venv\\Scripts\\python.exe make_overlay_previews.py
 
-Writes transparent PNGs into website/public/overlay/.
+Writes transparent PNGs into website/public/overlay/. These are not illustrations
+of the overlay: they come from `pill_render`, the same function `pill.py` calls at
+24 fps, so a redesign only needs this re-running.
 
-**These are not illustrations of the overlay. They are the overlay.** The website
-had a hand-drawn SVG approximation, and it was wrong in every particular: burnt
-sienna instead of red, a wide flat ellipse instead of a round organic shape, no
-waveform bars inside the blob, no grey waveform marching out to the sides, no
-rising dots, and a black box behind something that is actually transparent.
-
-Importing `pill_render` and calling the same function `pill.py` calls at 24 fps
-removes that entire class of error. If the overlay is redesigned, re-run this and
-the site is correct again.
-
-Rendered at 2x the shipped size so they stay sharp on a high-DPI display, and left
-transparent so the page can place them on any background.
+Rendered at 2x the shipped size for high-DPI displays, and left transparent so the
+page can place them on any background.
 """
 
 import sys
@@ -31,16 +23,14 @@ OUT = ROOT / "website" / "public" / "overlay"
 
 SCALE = 2
 
-# A frame is a moment in an animation, so the moment has to be chosen. These
-# values were picked to show the overlay doing something rather than idling:
-# mid-level input so the inner bars have height and the side waveform has shape,
-# and a `t` where the organic outline is visibly off-round.
+# A frame is a moment in an animation, so the moment matters: mid-level input so
+# the inner bars have height and the side waveform has shape, and a `t` where the
+# organic outline is visibly off-round.
 LEVEL = 0.62
 T = 1.35
 
-# Oldest first, newest last - the side waveform marches outward from the newest
-# sample, so this decides the shape of the trailing wave. Shaped like someone
-# mid-sentence rather than a flat line or a tidy ramp.
+# Oldest first: the side waveform marches outward from the newest sample, so this
+# array is the shape of the trailing wave.
 HISTORY = [
     0.05, 0.09, 0.18, 0.34, 0.52, 0.61, 0.48, 0.33, 0.22, 0.31,
     0.46, 0.58, 0.67, 0.71, 0.62, 0.44, 0.29, 0.36, 0.51, 0.64,
@@ -50,10 +40,8 @@ HISTORY = [
 SHOTS = [
     # name,      style,     state,       text
     #
-    # One shot per overlay style, in its recording state. The "transcribing"
-    # state renders in amber and is a genuinely different look, but nothing on the
-    # site shows it, and an asset nobody references is an asset nobody notices has
-    # broken. Add it back here the day a page needs it.
+    # One shot per overlay style, in its recording state. Nothing on the site
+    # shows the amber "transcribing" state, so it is not rendered.
     ("blob", "blob", "recording", ""),
     ("capsule", "capsule", "recording", ""),
     (
@@ -82,9 +70,8 @@ def main() -> int:
         )
         img = render(style, size, fs)
 
-        # The caption frame is a canvas with the pill centred in it, so most of it
-        # is empty. Cropping to the drawn content stops the page from reserving a
-        # 1320x300 box for a pill that occupies a third of it.
+        # The caption frame is a canvas with the pill centred in it, so cropping to
+        # the drawn content stops the page reserving a 1320x300 box for a third of it.
         bbox = img.getbbox()
         if bbox:
             img = img.crop(bbox)

@@ -3,23 +3,15 @@ Generate the application icon set from one definition.
 
     venv\\Scripts\\python.exe make_icon.py
 
-Writes three files from one definition:
+Writes assets/casper.ico, assets/casper.png and website/public/favicon.ico from
+the same frames, so the tray icon, the installer and the website cannot show three
+different logos.
 
-    assets/casper.ico            the executable, the installer, window title bars
-    assets/casper.png            docs and anywhere a PNG is easier
-    website/public/favicon.ico   the browser tab
-
-All from the same frames, so the tray icon, the installer and the website cannot
-show three different logos.
-
-The mark is drawn in code rather than stored as a binary blob so it stays
-reviewable in a diff, and so every size is rendered at its own resolution instead
-of being scaled down from one bitmap - a 16 px icon scaled from 256 px turns to
-mush, and 16 px is the size most users actually see in the tray.
-
-Design: a soft-edged speech mark with a vertical dictation caret cut out of it.
-Burnt sienna on transparent, matching the website's single accent colour so the
-tray icon, the installer and the site are recognisably the same product.
+Drawn in code so it stays reviewable in a diff, and so every size is rendered at
+its own resolution: a 16 px icon downscaled from 256 px turns to mush, and 16 px
+is the size most users see. The mark is a soft-edged speech shape with a vertical
+dictation caret cut out of it, burnt sienna on transparent, matching the website's
+accent colour.
 """
 
 import sys
@@ -37,23 +29,17 @@ ACCENT = (177, 78, 42)
 ACCENT_DEEP = (138, 57, 30)
 CARET = (255, 250, 246)
 
-# Windows uses 16 and 32 constantly (tray, title bar, Explorer list view), 48 in
-# Explorer, 256 for the large tile and the installer header.
-#
-# 20 and 40 are here for a specific reason: Windows scales notification icons
-# with the display, so 125% scaling asks for 20 px and 250% for 40. Without those
-# frames it takes the nearest larger one and squashes it - which produced a
-# three-bar mark crushed into 20 px on a 125% display, and looked exactly as bad
-# as that sounds. Every size Windows asks for should be a size we drew.
+# 16 and 32 for the tray, title bar and Explorer list view, 48 in Explorer, 256
+# for the large tile and the installer header. 20 and 40 are what Windows asks for
+# when notification icons are scaled to 125% and 250%; without those frames it
+# squashes the nearest larger one.
 SIZES = [16, 20, 24, 32, 40, 48, 64, 128, 256]
 
-# Rendering happens at this multiple of the target size and is then reduced, so
-# curves are antialiased properly at every size.
+# Render at size * SS and reduce, so curves antialias properly at every size.
 SS = 8
 
-# Below this, the three-bar mark is replaced by a single bold bar. Windows draws
-# tray icons at 16 px (100% scaling) and 20 px (125%), and three marks in a box
-# that small is mush rather than detail.
+# Below this the three-bar mark becomes a single bold bar. Windows draws tray icons
+# at 16 px (100% scaling) and 20 px (125%), where three bars are mush.
 SIMPLE_BELOW = 32
 
 
@@ -61,28 +47,21 @@ def draw_mark(size: int) -> Image.Image:
     """
     Render the mark at `size` pixels, supersampled then reduced.
 
-    **Detail is chosen per size, not scaled.** The first version used the same
-    three-bar mark at every resolution, which measured 1.25 px per side bar at
-    16 px and 1.56 px at 20 px - the sizes Windows actually uses in the tray at
-    100% and 125% scaling. Features that thin antialias into grey mush, which is
-    exactly how it looked: compressed and indistinct.
-
-    So below `SIMPLE_BELOW` the mark is a single bold bar. Above it, three.
+    Detail is chosen per size, not scaled. The three-bar mark measures 1.25 px per
+    side bar at 16 px and 1.56 px at 20 px, thin enough to antialias into grey, so
+    below SIMPLE_BELOW the mark is a single bold bar and above it three.
     """
     n = size * SS
     img = Image.new("RGBA", (n, n), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
 
-    # A squircle-ish rounded square: softer than a circle, less generic than a
-    # plain rounded rect, and it stays readable when reduced to 16 px. The
-    # padding gives it room to sit next to other tray icons instead of looking
-    # oversized and cramped.
+    # A squircle-ish rounded square, still readable when reduced to 16 px. The
+    # padding keeps it from looking oversized next to other tray icons.
     pad = n * 0.09
     radius = n * 0.28
     box = (pad, pad, n - pad, n - pad)
 
-    # Vertical gradient fill, drawn as a clipped band stack. Flat colour reads as
-    # cheap at large sizes; a gradient survives reduction without banding.
+    # Vertical gradient as a clipped band stack; it survives reduction unbanded.
     grad = Image.new("RGBA", (n, n), (0, 0, 0, 0))
     gd = ImageDraw.Draw(grad)
     for y in range(n):
@@ -104,8 +83,7 @@ def draw_mark(size: int) -> Image.Image:
     cx, cy = n / 2, n / 2
 
     if size < SIMPLE_BELOW:
-        # One bold bar. At 16 px this is a solid 3.5 px of white against the
-        # accent, which survives being handed to Windows and rescaled.
+        # A solid 3.5 px of white at 16 px, which survives Windows rescaling it.
         bar_w = n * 0.22
         bar_h = n * 0.46
         d.rounded_rectangle(
@@ -131,8 +109,7 @@ def draw_mark(size: int) -> Image.Image:
         )
 
     if size >= 48:
-        # A faint inner highlight along the top edge gives the shape depth at the
-        # sizes where anyone can see it. Skipped when small, where it just muddies.
+        # Faint top-edge highlight for depth. Skipped small, where it just muddies.
         hl = Image.new("RGBA", (n, n), (0, 0, 0, 0))
         ImageDraw.Draw(hl).rounded_rectangle(
             (pad, pad, n - pad, n - pad), radius=radius,
@@ -149,8 +126,8 @@ def main() -> int:
     frames = [draw_mark(s) for s in SIZES]
 
     ico = ASSETS / "casper.ico"
-    # Pillow writes every supplied image as its own frame when sizes are given,
-    # so each resolution is the one rendered for it rather than a downscale.
+    # Given explicit sizes, Pillow writes each supplied image as its own frame, so
+    # every resolution is the one drawn for it rather than a downscale.
     frames[-1].save(ico, format="ICO",
                     sizes=[(s, s) for s in SIZES],
                     append_images=frames[:-1])
@@ -162,12 +139,8 @@ def main() -> int:
           f"{len(SIZES)} sizes: {SIZES}")
     print(f"{png.name:16} {png.stat().st_size / 1024:6.1f} KB  256x256")
 
-    # The website's favicon is written from the same frames, because it had
-    # drifted: public/favicon.ico was a single-frame image unrelated to this mark,
-    # left over from the template the site was scaffolded from. A browser tab
-    # showing a different logo to the tray icon undermines the one thing this
-    # product is selling, which is that it is a coherent piece of software rather
-    # than a script someone put a name on.
+    # The favicon is written from the same frames, so the browser tab cannot drift
+    # away from the tray icon.
     favicon = ROOT / "website" / "public" / "favicon.ico"
     if favicon.parent.exists():
         frames[-1].save(favicon, format="ICO",

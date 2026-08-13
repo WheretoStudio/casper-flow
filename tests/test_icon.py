@@ -1,12 +1,7 @@
 """The application icon.
 
-The tray icon looked "compressed and not proper", and the cause was measurable
-rather than aesthetic: the mark's thinnest features were 1.25 px wide at 16 px,
-the .ico had no 20 px frame so a 125% display got the three-bar 32 px frame
-squashed, and the tray resampled the 256 px frame down to 64 before Windows
-shrank it again.
-
-These tests encode the parts of that which are objective facts about the file.
+Objective facts about assets/casper.ico: the frames Windows asks for exist, the
+small ones are legible, and the tray hands over a frame that needs no rescaling.
 """
 
 import pytest
@@ -33,9 +28,8 @@ def frames(ico) -> dict[int, Image.Image]:
 
 
 class TestSizesWindowsActuallyAsksFor:
-    # Windows scales notification icons with the display: 16 px at 100%,
-    # 20 at 125%, 24 at 150%, 32 at 200%, 40 at 250%. A missing frame means the
-    # nearest larger one gets squashed, which is what went wrong.
+    # Windows scales tray icons with the display: 16 px at 100%, 20 at 125%,
+    # 24 at 150%, 32 at 200%, 40 at 250%. A missing frame gets squashed.
     DPI_SIZES = (16, 20, 24, 32, 40)
 
     @pytest.mark.parametrize("size", DPI_SIZES)
@@ -53,10 +47,7 @@ class TestSizesWindowsActuallyAsksFor:
 
 
 class TestSmallFramesAreLegible:
-    """
-    The original failure: features too fine to survive the size they are drawn
-    for. Measured on the rendered pixels rather than argued about.
-    """
+    """Features must survive the size they are drawn for, measured on pixels."""
 
     @pytest.mark.parametrize("size", (16, 20, 24))
     def test_the_mark_is_at_least_two_pixels_wide(self, frames, size):
@@ -83,10 +74,7 @@ class TestSmallFramesAreLegible:
 
     @pytest.mark.parametrize("size", (16, 20, 24))
     def test_small_frames_use_the_simple_mark(self, frames, size):
-        """
-        Below make_icon.SIMPLE_BELOW there should be one bar, not three. Three
-        marks in a 16px box is the thing that looked compressed.
-        """
+        """Below make_icon.SIMPLE_BELOW there is one bar, not three."""
         assert size < make_icon.SIMPLE_BELOW
         img = frames[size]
         w, h = img.size
@@ -118,10 +106,7 @@ class TestSmallFramesAreLegible:
 
 class TestFramesAreNotJustResizes:
     def test_a_small_frame_differs_from_the_large_one_reduced(self, frames):
-        """
-        Each size is rendered at its own resolution. If the 16px frame were the
-        256px frame downscaled it would be identical to this, and mush.
-        """
+        """Each size is rendered at its own resolution, not downscaled to mush."""
         reduced = frames[256].resize((16, 16), Image.LANCZOS)
         assert frames[16].tobytes() != reduced.tobytes()
 

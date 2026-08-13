@@ -1,8 +1,7 @@
 """Config loading and validation.
 
-A dictation tool reads its settings from a hand-editable JSON file, so a bad
-value has to degrade to the default with a log line rather than crash on the
-hotkey press.
+Settings come from a hand-editable JSON file, so a bad value must degrade to the
+default with a log line rather than crash on the hotkey press.
 """
 
 import json
@@ -41,10 +40,7 @@ class TestRangeValidation:
 
 
 class TestShippedDefaults:
-    """
-    The shipped settings.json is what a new user gets, so its values are part of
-    the product rather than an example file.
-    """
+    """settings.json is what a new user gets, so its values are product decisions."""
 
     @pytest.fixture
     def shipped(self, repo_root) -> dict:
@@ -57,21 +53,13 @@ class TestShippedDefaults:
         assert shipped["transcribe_backend"] == "local"
 
     def test_cleanup_ships_deterministic(self, shipped):
-        """
-        'rules' cannot invent a word. An LLM can, and during development one
-        echoed its own prompt into a document as though it had been dictated.
-        """
+        """'rules' cannot invent a word. A language model can."""
         assert shipped["llm_backend"] == "rules"
 
     def test_language_is_pinned_because_detection_is_the_slowest_step(self, shipped):
         """
-        This assertion used to require `null`, on the reasoning that pinning a
-        language mangles code-mixed speech - which is true of a general-purpose
-        model, where pinning 'hi' produced Tamil script.
-
-        Measured on the corpus with the shipped Hinglish model, pinning 'en' is
-        accuracy-identical to auto-detection in all seven categories and 46%
-        faster, because detection was concluding 'en' every time. See
+        On the shipped Hinglish model, pinning 'en' is accuracy-identical to
+        auto-detection in all seven categories and 46% faster. See
         corpus/RESULTS.md.
         """
         assert shipped["language"] == "en"
@@ -79,25 +67,18 @@ class TestShippedDefaults:
     def test_the_shipped_model_is_the_one_measured_best_for_hinglish(self, shipped):
         """
         Swift scores 81.0% on code-switching against base's 20.5%, and base
-        cannot transcribe Hindi at all (100% WER). A `.en` model would be worse
-        still - it has no Hindi.
+        cannot transcribe Hindi at all. A `.en` model has no Hindi either.
         """
         assert not shipped["whisper_model"].endswith(".en")
         assert shipped["whisper_model"] == "swift-ct2"
 
     def test_no_prompt_is_shipped(self, shipped):
-        """
-        With a model actually trained on Hinglish the prompt cost accuracy on
-        code-switching and 39% latency, and it is what caused the prompt-leak bug.
-        """
+        """On a model trained on Hinglish the prompt costs accuracy and 39% latency."""
         assert shipped["initial_prompt"] is None
 
     def test_initial_prompt_is_a_word_list_not_sentences(self, shipped):
-        """
-        Sentences in initial_prompt get parroted back as if dictated. A
-        comma-separated word list primes vocabulary without giving Whisper a
-        sentence to continue.
-        """
+        """Sentences in initial_prompt get parroted back as if dictated; a word
+        list primes vocabulary without giving Whisper something to continue."""
         prompt = shipped.get("initial_prompt") or ""
         if not prompt:
             pytest.skip("no initial_prompt configured")

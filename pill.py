@@ -1,23 +1,12 @@
 """
-Floating status overlay.
+Floating status overlay, shown while the mic is live and while transcription runs.
 
-Shows an animated indicator while the mic is live and while transcription runs,
-so there is never a silent gap where you can't tell if anything is happening.
-
-Rendering is done with Pillow (see pill_render.py) and pushed to the screen
-through a Win32 *layered window* using UpdateLayeredWindow. That is what allows
-真 per-pixel alpha: soft halos, antialiased organic edges and drop shadows.
-tkinter's own drawing can only do hard-edged shapes with a chroma-key colour,
-which is why the first version looked flat.
-
-tkinter still owns the window so we get a message loop and lifecycle for free;
-we simply bypass its painting.
-
-The window is click-through and never takes focus, so it cannot steal the caret
-from the app you are dictating into.
-
-If anything about the layered window fails, we fall back to a plain tkinter
-capsule so the app keeps working without an overlay.
+Frames come from pill_render.py and reach the screen through a Win32 layered
+window (UpdateLayeredWindow), the only route to per-pixel alpha for the halos and
+antialiased edges. tkinter owns the window for its message loop and lifecycle but
+does none of the painting. The window is click-through and never takes focus, so
+it cannot steal the caret from the app being dictated into. If the layered window
+fails, a plain tkinter capsule takes over.
 """
 
 from __future__ import annotations
@@ -84,11 +73,9 @@ class BITMAPINFO(ctypes.Structure):
 
 def _declare_signatures():
     """
-    Declare argtypes/restypes for every Win32 call we make.
-
-    Without this ctypes marshals Python ints as C int (32-bit), and window/GDI
-    handles on 64-bit Windows routinely exceed that range - which surfaces as
-    "OverflowError: int too long to convert" rather than anything obvious.
+    Declare argtypes/restypes for every Win32 call made here. Otherwise ctypes
+    marshals Python ints as 32-bit C int, and 64-bit window and GDI handles
+    exceed that range ("OverflowError: int too long to convert").
     """
     HWND, HDC = wintypes.HWND, wintypes.HDC
     HBITMAP, HGDIOBJ = wintypes.HBITMAP, wintypes.HGDIOBJ
@@ -176,11 +163,9 @@ class _LayeredSurface:
 
     def apply_style(self):
         """
-        (Re-)apply the extended window styles.
-
-        Cheap and idempotent, and worth doing before each show: tkinter can
-        recreate the underlying window, which drops WS_EX_LAYERED and makes
-        UpdateLayeredWindow fail with ERROR_INVALID_PARAMETER (87).
+        (Re-)apply the extended window styles. Idempotent, and called before each
+        show: tkinter can recreate the underlying window, dropping WS_EX_LAYERED
+        and failing UpdateLayeredWindow with ERROR_INVALID_PARAMETER (87).
         """
         style = _u32.GetWindowLongW(self.hwnd, GWL_EXSTYLE)
         _u32.SetWindowLongW(
@@ -234,10 +219,9 @@ def _to_bgra(img) -> bytes:
 
 class RecordingPill:
     """
-    Thread-safe status overlay.
-
-    show()/set_state()/hide() may be called from any thread; work is marshalled
-    onto the tkinter loop with after().
+    Thread-safe status overlay. tkinter gets its own thread and mainloop in
+    _tk_main; show()/set_state()/hide() may be called from any thread and are
+    marshalled onto that loop with after().
     """
 
     def __init__(self, cfg: dict | None = None):
@@ -337,10 +321,8 @@ class RecordingPill:
     @staticmethod
     def _toplevel_hwnd(root: tk.Tk) -> int:
         """
-        Real top-level HWND for a Tk window.
-
-        winfo_id() can return a child handle, and UpdateLayeredWindow must be
-        given the top-level window, so walk up the parent chain.
+        Real top-level HWND for a Tk window. winfo_id() can return a child
+        handle, and UpdateLayeredWindow needs the top-level window.
         """
         hwnd = root.winfo_id()
         try:
@@ -361,12 +343,9 @@ class RecordingPill:
             self._ready.set()
             return
 
-        # This is the process's first and only Tk root, so the default icon set
-        # here becomes the one every later Tk window inherits - the settings
-        # window, the wizard, and any dialog. Without it Tk fell back to its own
-        # feather, which is what the taskbar was actually showing.
-        # The overlay itself is overrideredirect and so has no taskbar button;
-        # this call is for the windows that do.
+        # First and only Tk root in the process, so the icon set here is inherited
+        # by the settings window, wizard and dialogs. This overlay is
+        # overrideredirect and has no taskbar button of its own.
         apply_window_icon(root)
 
         try:
@@ -378,15 +357,13 @@ class RecordingPill:
 
             if _u32 and _g32:
                 try:
-                    # The window must be mapped before UpdateLayeredWindow will
-                    # display anything, so realise it first.
+                    # The window must be mapped before UpdateLayeredWindow paints.
                     root.deiconify()
                     root.update()
                     self._surface = _LayeredSurface(self._toplevel_hwnd(root), w, h)
-                    # Start invisible by painting a fully transparent frame.
-                    # Deliberately NOT withdraw(): tkinter can recreate the
-                    # window on withdraw/deiconify, which drops the layered
-                    # style and breaks the blit.
+                    # Start invisible with a transparent frame, not withdraw():
+                    # tkinter can recreate the window on withdraw/deiconify, which
+                    # drops the layered style and breaks the blit.
                     self._surface.blit(self._surface.blank, -10000, -10000)
                     log.info(
                         f"Overlay ready: style={self.style} size={w}x{h} "
@@ -464,8 +441,7 @@ class RecordingPill:
             return
         try:
             if self._surface:
-                # Layered path: the window stays mapped the whole time and we
-                # simply start painting real frames again.
+                # Layered path: the window stays mapped; just resume real frames.
                 self._surface.apply_style()
                 self._root.attributes("-topmost", True)
             else:
@@ -494,9 +470,8 @@ class RecordingPill:
             self._anim_id = None
         try:
             if self._surface:
-                # Paint a fully transparent frame and park the window offscreen
-                # instead of withdrawing it, so tkinter never recreates the
-                # window and drop the layered style.
+                # Transparent frame parked offscreen instead of withdraw(), so
+                # tkinter never recreates the window and drops the layered style.
                 self._surface.blit(self._surface.blank, -10000, -10000)
             else:
                 self._root.withdraw()

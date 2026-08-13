@@ -1,41 +1,15 @@
 """
-Deterministic post-transcription corrections.
+Deterministic post-transcription corrections. No speech model knows your
+colleagues' names, so the user supplies them. Two mechanisms, highest precedence
+first:
 
-Proper nouns are the worst category on the measured corpus: 44.8% accuracy,
-against 81.0% for code-switched speech generally. `Bangalore` came back as
-`Thank you`, `WhatsApp` as `Vah sab`. That is not a model-size problem - no
-Whisper variant has heard of your colleagues - so it is not solved by a bigger
-download.
+  replacements   explicit "heard this, meant that" pairs, applied exactly
+  vocabulary     canonical spelling and capitalisation for known words, matched
+                 case-insensitively and exactly ("whatsapp" -> "WhatsApp")
 
-It is solved by telling the app the words you use. Two mechanisms, in order of
-precedence:
-
-  replacements   an explicit "heard this, meant that" mapping. Exact, and always
-                 applied. What you reach for when you see the same mistake twice.
-
-  vocabulary     canonical spelling and capitalisation for words you use.
-                 Matched case-insensitively and exactly, so `whatsapp` becomes
-                 `WhatsApp`. It never changes which word was transcribed.
-
-Both are deterministic. Neither can invent a word that is not in your own list,
-which is the same property that made the `rules` cleanup preferable to an LLM.
-
-**This layer was originally more ambitious and was cut down by measurement.**
-Vocabulary entries used to match by *sound* rather than spelling, on the theory
-that the weak proper-noun category was full of near-misses a phonetic match could
-recover. Measured against the corpus, that theory was wrong twice over:
-
-  * The failures are not near-misses. `Bangalore` was transcribed `Thank you`
-    and `WhatsApp` as `Vah sab` - unrelated words, not misspellings. There is no
-    signal left for a matcher to use.
-  * Sound matching actively corrupted correct text. `shaam` (evening) and
-    `sharp` both fold to within one edit of `Sharma`, so both were rewritten to
-    a colleague's name in sentences that had been transcribed perfectly.
-
-Fixing proper nouns needs the model biased *before* decoding, not patched
-afterwards - that is what `initial_prompt` is for. What survives here is the part
-that cannot be wrong: exact matching for canonical form, and explicit
-replacements the user asked for by name.
+Neither can invent a word outside the user's own lists. Matching is exact only;
+phonetic matching corrupts correct text. Biasing the decoder is the way to fix
+proper nouns before the fact - see `initial_prompt`.
 """
 
 import logging
@@ -44,12 +18,8 @@ import re
 log = logging.getLogger("casper.corrections")
 
 # Combining marks are not \w in Python's `re`, and Devanagari writes most of its
-# vowels with them. Without this, "मीटिंग" tokenises as ['म', 'ट', 'ग'] - the word
-# is shredded, a Devanagari vocabulary entry can never match, and `\b` behaves
-# backwards: `\bहै\b` fails (the trailing matra is not a word character, so \b
-# demands another word character after it) while `\bमीट\b` happily matches inside
-# "मीटिंग". Both were verified before this was added. output_script="devanagari"
-# is a supported setting, so this is a supported script.
+# vowels with them. Without this list, "मीटिंग" tokenises as ['म', 'ट', 'ग'] and \b
+# lands mid-word, so no Devanagari vocabulary entry can ever match.
 _MARKS = (
     "\u0900-\u0903"      # candrabindu, anusvara, visarga
     "\u093a-\u094f"      # vowel signs and virama
@@ -71,8 +41,8 @@ class Corrector:
     """
     Applies replacements and vocabulary matching to a transcript.
 
-    Built once from config and reused, because folding every vocabulary entry on
-    every dictation would be wasted work on the hot path.
+    Built once from config and reused; compiling the patterns per dictation would
+    be wasted work on the hot path.
     """
 
     def __init__(self, cfg: dict):
@@ -117,17 +87,10 @@ class Corrector:
         """
         The canonical form of this run of words, or None if it is not a term.
 
-        Returns the term even when the text already matches it exactly. "Not a
-        term" and "already correct" have to be different answers, because the
-        caller uses None to mean "try a narrower n-gram" - and conflating them
-        let an already-correct phrase be re-matched by a shorter entry. With
-        vocabulary ["Sharma ji", "sharma"], the correct text "Sharma ji" fell
-        through the 2-gram and was rewritten by the 1-gram to "sharma ji".
-
-        Case-insensitive exact match only. Deliberately not fuzzy: a phonetic
-        match rewrote `shaam` and `sharp` to `Sharma` on this corpus, turning
-        correct transcripts into wrong ones. A layer that damages good text is
-        worse than no layer.
+        Case-insensitive exact match only; phonetic matching corrupts correct text.
+        Returns the term even when the words already match it, because the caller
+        reads None as "try a narrower n-gram": with vocabulary ["Sharma ji",
+        "sharma"], conflating the two lets the 1-gram rewrite a correct "Sharma ji".
         """
         candidates = self._by_len.get(len(words))
         if not candidates:
@@ -142,18 +105,17 @@ class Corrector:
         if not self._by_len:
             return text
 
-        # Tokenise into words and the separators between them, so punctuation and
-        # spacing survive reassembly untouched.
+        # Words and the separators between them, so punctuation and spacing survive
+        # reassembly untouched.
         pieces = _WORD_RE.split(text)
         words = _WORD_RE.findall(text)
         if not words:
             return text
 
-        # pieces[k] is the separator before words[k], and pieces[-1] is whatever
-        # trailed the last word. So after consuming words[i:i+w] the separator to
-        # emit is pieces[i+w] - the one that followed the last word consumed.
-        # Emitting per output token instead would leave a stray separator behind
-        # whenever a multi-word term collapsed two words into one.
+        # pieces[k] is the separator before words[k]. After consuming words[i:i+w]
+        # the separator to emit is pieces[i+w], the one that followed the last word
+        # consumed; emitting one per output token would strand a separator whenever
+        # a multi-word term collapsed two words into one.
         result = [pieces[0]]
         i = 0
         # Longest terms first, so "Sharma ji" wins over "Sharma".
@@ -183,17 +145,14 @@ class Corrector:
             return text
         before = text
         for pattern, right in self.replacements:
-            # A function replacement, not a template string. `pattern.sub(right,
-            # ...)` interprets the user's text as a replacement template, so a
-            # correction value of "C:\temp" pasted a tab character and one of
-            # "\1x" raised re.error - which propagated out of the pipeline and
-            # discarded the whole dictation. Both were verified. The patterns are
-            # escaped; the replacements were not.
+            # A function, not a template string: sub() would read the user's value
+            # as a template, so "C:\temp" inserts a tab and "\1x" raises re.error
+            # and loses the whole dictation.
             text = pattern.sub(lambda _m, r=right: r, text)
         text = self._apply_vocabulary(text)
         if text != before:
-            # DEBUG, not INFO: this is the user's dictation, and casper.log is a
-            # plaintext file that is never rotated.
+            # DEBUG, not INFO: this is the user's dictation, and casper.log is
+            # plaintext and never rotated.
             log.debug(f"Corrections applied: {before!r} -> {text!r}")
         return text
 
@@ -205,9 +164,8 @@ def _cache_key(cfg: dict) -> str:
     """
     A key that changes when the settings this class reads change.
 
-    Keyed on the content rather than on `id(cfg)`: the settings window mutates
-    the config dict in place, so the identity never changed and edits to
-    `vocabulary` or `corrections` were ignored until the app was restarted.
+    Keyed on content, not `id(cfg)`: the settings window mutates the config dict in
+    place, so identity never changes and edits would need a restart to take effect.
     """
     return repr((cfg.get("corrections"), cfg.get("vocabulary")))
 

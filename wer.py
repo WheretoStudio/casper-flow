@@ -1,29 +1,17 @@
 """
-Word error rate, with an honest second opinion for Romanised Hinglish.
+Word error rate, with a second metric suited to Romanised Hinglish.
 
-Exact word matching is the standard metric and it is unfair to this task, because
-Hinglish written in Latin script has no canonical spelling. `yeh` and `yah`,
-`woh` and `vah`, `kahan` and `kahaan`, `nahi` and `nahin` are all the same word
-to a reader, and all count as errors to a plain scorer. So do digits against
-number words, where `42500` is arguably a better transcript than `forty two
-thousand five hundred`.
+Exact word matching is the standard metric and it is unfair here: Romanised
+Hinglish has no canonical spelling, so `yeh`/`yah`, `woh`/`vah` and `nahi`/`nahin`
+all read as one word and all count as errors. So do digits against number words.
 
-Two metrics are therefore reported:
+  strict  - exact word match, comparable to published WER figures.
+  fair    - romanisation variants and number formats folded together first.
 
-  strict  - exact word match. Comparable to published WER figures.
-  fair    - spelling variants and number formats folded together first.
-
-`fair` is a judgement call, and a metric that flatters results is worse than no
-metric, so three rules keep it honest:
-
-  * it only ever folds forms a Hindi speaker would read as the same word,
-  * it never folds two different words together - `Bangalore` and `Thank you`
-    stay a mistake,
-  * both numbers are always reported side by side, so the gap between them is
-    visible rather than hidden.
-
-The gap itself is informative: a large one means the model heard correctly and
-spelled differently, a small one means it genuinely misheard.
+`fair` only folds forms a Hindi speaker reads as the same word, and never folds two
+different words together: `Bangalore` against `Thank you` stays a mistake. Both are
+always reported side by side, and the gap is informative - a large one means the
+model heard correctly and spelled differently, a small one that it misheard.
 """
 
 import re
@@ -69,9 +57,8 @@ def _numbers_to_digits(words: list[str]) -> list[str]:
     """
     Collapse runs of number words into a single digit token.
 
-    Handles both a spoken quantity ("forty two thousand five hundred" -> 42500)
-    and digits read out one by one ("nine eight seven" -> 987), because speakers
-    do both and models transcribe both as digits.
+    Handles a spoken quantity ("forty two thousand five hundred" -> 42500) and
+    digits read out one by one ("nine eight seven" -> 987).
     """
     out: list[str] = []
     i = 0
@@ -82,7 +69,6 @@ def _numbers_to_digits(words: list[str]) -> list[str]:
             i += 1
             continue
 
-        # Consume the whole run of number words.
         run = []
         while i < len(words) and (
             words[i] in _UNITS or words[i] in _ORDINALS or words[i] in _SCALES
@@ -125,16 +111,14 @@ _FOLD = [
     (r"chh", "ch"),
     (r"([bcdfghjklmnpqrstvxyz])\1", r"\1"),   # doubled consonants
     (r"n$", ""),                              # nahi/nahin, hai/hain
-    # Trailing vowels and h are optional in romanisation: yeh/yah/ye,
-    # thoda/thode. The lookbehind keeps at least one character, or a word made
-    # entirely of these ("hai") would reduce to nothing and fall back to itself,
-    # so it would never match its own nasal variant ("hain").
+    # Trailing vowels and h are optional in romanisation: yeh/yah/ye, thoda/thode.
+    # The lookbehind keeps at least one character, or "hai" would reduce to nothing,
+    # fall back to itself, and never match its own nasal variant "hain".
     (r"(?<=.)[aeiouh]+$", ""),
 ]
 
 # High-frequency words whose vowels differ in ways the rules cannot catch without
-# also merging unrelated words. An explicit table is transparent and cannot
-# over-reach, which a general internal-vowel rule would.
+# also merging unrelated words. A general internal-vowel rule would over-reach.
 _ALIASES = {
     "hum": "ham",
     "tum": "tam",
@@ -149,12 +133,10 @@ def fold(word: str) -> str:
 
     Never applied to a token containing a digit, so numbers survive intact.
 
-    **Known limitation, stated rather than hidden:** stripping trailing vowels
-    merges the short postpositions - `ka`, `ki`, `ke` and `ko` all reduce to `k`.
-    Those are grammatically distinct, so the fair metric forgives a class of small
-    grammatical error a strict reader would count. That is the price of not
-    counting `yeh` against `yah`, and it is why both metrics are always reported
-    together rather than the fair one replacing the strict one.
+    Limitation: stripping trailing vowels merges the short postpositions - `ka`,
+    `ki`, `ke` and `ko` all reduce to `k` - so the fair metric forgives a class of
+    small grammatical error. That is the price of not counting `yeh` against `yah`,
+    and why both metrics are always reported together.
     """
     if any(c.isdigit() for c in word):
         return word
@@ -177,12 +159,11 @@ def _edit_distance(ref: list[str], hyp: list[str]) -> int:
 def word_error_rate(reference: str, hypothesis: str, *, fair: bool = False,
                     drop_fillers: tuple[str, ...] = ()) -> float:
     """
-    Word error rate. 0.0 is perfect; values above 1.0 are possible when the
-    hypothesis is longer than the reference.
+    Word error rate. 0.0 is perfect; above 1.0 is possible when the hypothesis is
+    longer than the reference.
 
-    fair=True folds number formats and romanisation variants first.
-    drop_fillers removes those words from both sides, for the case where the
-    cleanup step strips them anyway and their absence is not an error.
+    fair=True folds number formats and romanisation variants first. drop_fillers
+    drops those words from both sides, for when the cleanup step strips them anyway.
     """
     ref, hyp = tokens(reference), tokens(hypothesis)
 

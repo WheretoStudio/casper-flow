@@ -1,11 +1,7 @@
-"""The correction layer.
+"""The correction layer. Cases come from corpus/RESULTS.md transcripts.
 
-Cases are taken from real transcripts in corpus/RESULTS.md, where proper nouns
-were the worst category at 44.8% accuracy.
-
-The layer must fix what the user told it about and leave everything else alone.
-The second half matters more than the first: a correction layer that rewrites
-words the user did not ask about is worse than none, because it introduces errors
+It must fix what the user told it about and leave everything else alone. The
+second half matters more: rewriting words the user did not ask about puts errors
 into text that was already right.
 """
 
@@ -64,9 +60,7 @@ class TestExplicitReplacements:
 
 
 class TestDoesNotDamageGoodText:
-    """
-    The failure mode that matters. Every one of these must pass unchanged.
-    """
+    """The failure mode that matters: damaging text that was already right."""
 
     @pytest.mark.parametrize("text", [
         "kal ek meeting hai client ke saath, please report bhej dena",
@@ -81,8 +75,7 @@ class TestDoesNotDamageGoodText:
         assert c.apply(text) == text
 
     @pytest.mark.parametrize("text", [
-        # Both of these were rewritten to "Sharma" by an earlier phonetic
-        # matcher, in sentences the model had transcribed perfectly.
+        # An earlier phonetic matcher rewrote both of these to "Sharma".
         "thoda check karke bata dena, deadline kal shaam tak hai",
         "meeting hai twenty fourth March ko sharp three thirty pm",
     ])
@@ -102,11 +95,8 @@ class TestDoesNotDamageGoodText:
         assert c.apply("the bungalow is ready") == "the bungalow is ready"
 
     def test_a_substituted_name_is_not_recoverable(self):
-        """
-        Documents the measured limitation rather than pretending otherwise:
-        'Bangalore' was transcribed 'Thank you', and no post-hoc matcher can
-        recover a word the model never emitted. Only an explicit replacement can.
-        """
+        """No matcher can recover a word the model never emitted; only an
+        explicit replacement can."""
         c = make(["Bangalore"])
         assert c.apply("Thank you office") == "Thank you office"
 
@@ -122,10 +112,7 @@ class TestDoesNotDamageGoodText:
 
 class TestCannotHallucinate:
     def test_output_words_come_only_from_input_or_the_user_list(self):
-        """
-        The property that made deterministic cleanup preferable to an LLM: it
-        cannot produce a word the user did not supply.
-        """
+        """Deterministic cleanup cannot produce a word the user did not supply."""
         vocab = ["Bangalore", "WhatsApp"]
         c = make(vocab)
         out = c.apply("sarma ji ne kaha ki bangalore office band hai")
@@ -136,21 +123,16 @@ class TestCannotHallucinate:
 
 
 class TestReplacementValuesAreLiteralText:
-    """
-    A correction value is text the user typed, not a regex replacement template.
+    """A correction value is literal text, not a regex replacement template.
 
-    It used to be passed straight to `re.Pattern.sub`, which interprets
-    backslashes and group references. Two measured consequences, both of which
-    reached the user: a Windows path in a correction value pasted a tab character
-    into their document, and a stray group reference raised `re.error` out of the
-    pipeline and discarded the whole dictation with a message about invalid group
-    references. The patterns were escaped; the replacements were not.
+    Passed to `re.Pattern.sub` unescaped, a Windows path inserts a tab character
+    and a group reference raises re.error out of the pipeline.
     """
 
     @pytest.mark.parametrize("value", [
-        r"C:\temp",          # \t became a tab
-        r"C:\new\report",    # \n and \r
-        r"\1x",              # raised re.error: invalid group reference
+        r"C:\temp",
+        r"C:\new\report",
+        r"\1x",
         r"\g<0>",
         r"\\",
         "50% \\ done",
@@ -160,30 +142,18 @@ class TestReplacementValuesAreLiteralText:
         assert c.apply("the placeholder here") == f"the {value} here"
 
     def test_a_backslash_value_cannot_raise_out_of_the_pipeline(self):
-        """
-        main.py catches exceptions from this layer by discarding the dictation, so
-        anything raising here costs the user everything they just said.
-        """
+        """main.py discards the dictation on any exception from this layer."""
         for value in (r"\1", r"\g<9>", "\\", r"\x"):
             c = make(corrections={"foo": value})
             c.apply("say foo now")     # must not raise
 
 
 class TestDevanagariIsAWholeWord:
-    """
-    `output_script: "devanagari"` is a supported setting, so Devanagari has to
-    survive this layer.
+    """Devanagari must survive this layer: `output_script: "devanagari"` ships.
 
-    Python's `re` does not count combining marks as word characters, and
-    Devanagari writes most of its vowels with them. That broke both mechanisms in
-    opposite directions, and both were measured before being fixed:
-
-        _WORD_RE.findall("कल मीटिंग है")  ->  ['कल', 'म', 'ट', 'ग', 'ह']
-        re.search(r"\\bहै\\b",  "कल मीटिंग है")  ->  False   (never matches)
-        re.search(r"\\bमीट\\b", "कल मीटिंग है")  ->  True    (matches mid-word)
-
-    So a Devanagari vocabulary entry could never match, and a Devanagari
-    correction key could rewrite the middle of a longer word.
+    Python's `re` does not count combining marks as word characters, so a
+    Devanagari vocabulary entry never matched and a Devanagari correction key
+    could rewrite the middle of a longer word.
     """
 
     def test_a_word_ending_in_a_vowel_sign_can_be_matched(self):
@@ -215,10 +185,7 @@ class TestDevanagariIsAWholeWord:
 
 
 class TestBadSettingsDegradeQuietly:
-    """
-    These are hand-edited JSON values. A wrong type must not cost a dictation:
-    `corrections: []` used to raise AttributeError out of the pipeline.
-    """
+    """Hand-edited JSON values: a wrong type must not cost a dictation."""
 
     @pytest.mark.parametrize("cfg", [
         {"corrections": []},
@@ -234,11 +201,7 @@ class TestBadSettingsDegradeQuietly:
 
 class TestAlreadyCorrectTextIsNotRematched:
     def test_a_multi_word_term_is_not_undone_by_a_shorter_one(self):
-        """
-        With both entries present, "Sharma ji" matched the two-word term, was
-        found to be already correct, and was reported as no match - so the loop
-        tried again with the one-word entry and rewrote it. "Not a term" and
-        "already correct" have to be different answers.
-        """
+        """Not-a-term and already-correct have to be different answers, or the
+        one-word entry undoes the two-word match."""
         c = make(vocabulary=["Sharma ji", "sharma"])
         assert c.apply("Sharma ji") == "Sharma ji"

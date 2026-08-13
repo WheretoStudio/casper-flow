@@ -1,17 +1,12 @@
 """
 Global hold-to-talk hotkey listener.
 
-Supports both forms:
-  * a single key   -> "scroll lock", "f13", "pause"
-  * a combo        -> "ctrl+shift+space", "ctrl+alt+d"
+Accepts a single key ("scroll lock", "f13") or a combo ("ctrl+shift+space").
 
-Why not keyboard.add_hotkey()? That fires once on press and gives no release
-event, so it can't express hold-to-talk. Instead we bind the *trigger* key
-(the last element of the combo) and check the modifier state ourselves, then
-watch for release of either the trigger or any required modifier.
-
-NOTE: `keyboard.on_press_key()` only accepts a single key name - passing
-"ctrl+shift+space" raises ValueError. That is the reason for the parsing below.
+keyboard.add_hotkey() fires once on press and gives no release event, so it
+cannot express hold-to-talk. Instead the trigger key - the last element of the
+combo - is bound on its own and the modifier state is checked here. This also
+works around on_press_key() rejecting anything but a single key name.
 """
 
 import ctypes
@@ -30,9 +25,9 @@ try:
 except Exception:      # pragma: no cover - non-Windows
     _user32 = None
 
-# Virtual-key codes for keys people actually use as a push-to-talk trigger.
-# Needed because MapVirtualKey can't translate the 0xE0-prefixed scan codes the
-# keyboard library reports (it turned scroll lock's 0xE046 into VK_CANCEL).
+# Virtual-key codes for the keys usable as a push-to-talk trigger. MapVirtualKey
+# cannot translate the 0xE0-prefixed scan codes the keyboard library reports - it
+# maps scroll lock's 0xE046 to VK_CANCEL - so the common ones are listed here.
 _VK_TABLE = {
     "scroll lock": 0x91, "pause": 0x13, "caps lock": 0x14, "num lock": 0x90,
     "space": 0x20, "tab": 0x09, "enter": 0x0D, "backspace": 0x08,
@@ -45,11 +40,9 @@ for _i in range(1, 25):
     _VK_TABLE[f"f{_i}"] = 0x6F + _i          # f1 = 0x70 ... f24 = 0x87
 
 
-# Keys whose entry above names one side only. VK_CONTROL (0x11), VK_SHIFT (0x10)
-# and VK_MENU (0x12) each report *either* side, so they need nothing here - but
-# there is no combined code for Windows, only VK_LWIN and VK_RWIN. Holding the
-# right Windows key therefore read as "up", and the watchdog cut the dictation
-# about 180 ms in.
+# Keys whose entry above names one side only. VK_CONTROL, VK_SHIFT and VK_MENU
+# each report either side, but there is no combined code for Windows - only
+# VK_LWIN and VK_RWIN - so the right key would otherwise always read as up.
 _VK_EITHER_SIDE = {0x5B: (0x5B, 0x5C)}
 
 
@@ -57,8 +50,8 @@ def _physically_down(vk: int) -> bool:
     """
     True if the key is physically held, straight from the OS.
 
-    keyboard.is_pressed() cannot be used here: it reads the library's own
-    bookkeeping, which is exactly what goes stale when a KEY-UP is dropped.
+    Not keyboard.is_pressed(): that reads the library's own bookkeeping, which is
+    what goes stale when a KEY-UP is dropped.
     """
     if not _user32 or not vk:
         return False
@@ -86,33 +79,13 @@ MODIFIERS = {"ctrl", "shift", "alt", "windows"}
 
 FALLBACK_HOTKEY = "caps lock"
 
-# How long a replayed keystroke is expected to take to come back through our own
-# hook, if it comes back at all. Deliberately short: for this window the guard
-# cannot distinguish our injected event from a real keypress, so every
-# millisecond of it is a millisecond in which a genuine press could be ignored.
+# Seconds a replayed keystroke may take to arrive back through our own hook, if it
+# arrives at all. Kept short: within this window the guard cannot tell an injected
+# event from a real keypress, so a genuine press here is swallowed and the
+# dictation does not start. The user presses again, which is the better failure -
+# shortening the window instead lets the app read its own replayed tap as a press
+# and start recording unasked.
 _REPLAY_GRACE = 0.12
-
-# **Two attempts to shorten or compensate for this window were tried and both were
-# worse. Do not try them again without reading this.**
-#
-# The window's cost is real: a genuine keypress arriving inside it is consumed as
-# though it were our own injected replay, so the dictation silently never starts.
-# It is also narrow, and self-correcting - the user presses again.
-#
-# 1. *Recover afterwards.* Once the guard came off, ask the OS whether the trigger
-#    was still physically held and start the hold if so. The tail of the replayed
-#    tap still reads as down, so this started dictations nobody asked for. Adding a
-#    3 x 25 ms confirmation window reduced it but did not remove it.
-# 2. *Give up early.* Poll for the guard to be consumed and disarm after ~30 ms
-#    instead of sleeping the full grace, on the theory that the keyboard package
-#    usually hides its own injected events so nothing would ever consume it.
-#    Sometimes it does not hide them, and under load they arrive later than 30 ms -
-#    at which point the app reads its own replayed tap as a user press and starts
-#    recording. Reproduced as `['press', 'discard', 'press', 'dictate']`.
-#
-# Both failures are the same shape and it is the worse one: a dictation starting
-# when the user did not ask, rather than not starting when they did. The full sleep
-# stays.
 
 
 def normalise(name: str) -> str:
@@ -146,40 +119,32 @@ class HotkeyListener:
         self._down_at = 0.0
         self._kb = None
 
-        # Hook callbacks must return almost instantly. Windows delivers key
-        # events to a low-level hook one at a time, so if a callback blocks,
-        # events arriving during that window are dropped - including the
-        # KEY-UP that ends a hold. Callbacks therefore only update state and
-        # enqueue; a single worker thread runs the real handlers in order.
+        # Windows delivers key events to a low-level hook one at a time, so a
+        # blocking callback drops whatever arrives meanwhile - including the KEY-UP
+        # that ends a hold. Callbacks only update state and enqueue; one worker
+        # thread runs the real handlers in order.
         self._events: queue.Queue = queue.Queue()
         self._worker: threading.Thread | None = None
         self._trigger_vk = 0
 
-        # When we suppress a key we take over its normal job completely, which
-        # for Caps Lock means the key stops working as Caps Lock. A tap that was
-        # too short to be a dictation is therefore replayed, so a quick press
-        # still toggles.
+        # Suppressing a key takes over its normal job, so Caps Lock stops
+        # toggling. A tap too short to be a dictation is replayed to give it back.
         #
-        # The replay has to be recognised if it comes back through our own hook.
-        # The keyboard package normally hides its own injected events (it sets
-        # _listener.is_replaying and returns early), but that flag is global and
-        # is cleared as soon as SendInput returns, while the hook callback is
-        # delivered on the listener thread - so under load the event can arrive
-        # after the flag is already down. Observed once in testing.
-        #
-        # An exact count is used rather than a time window because the two
-        # failure modes are not equally bad. Miscounting costs at most one
-        # ignored press; mistaking a replay for a real press leaves _held stuck
-        # True, which breaks every dictation until the app is restarted.
+        # That replay must be recognised if it returns through our own hook. The
+        # keyboard package usually hides its injected events via a global
+        # is_replaying flag, but the flag clears when SendInput returns while the
+        # callback arrives on the listener thread, so under load it can slip
+        # through. Counted exactly rather than timed: a miscount costs one ignored
+        # press, whereas mistaking a replay for a real press leaves _held stuck
+        # True and breaks every dictation until restart.
         self._replay_lock = threading.Lock()
         self._replay_pending = 0
         self._replay_deadline = 0.0
 
-        # Set when the watchdog forces a release while the key is, as far as we
-        # know, still physically down. Auto-repeat keeps delivering KEY-DOWN in
-        # that state, and each one looked like a fresh press: the forced release
-        # ended one dictation and immediately started another, in a loop, for as
-        # long as the key stayed down. Cleared by the next real KEY-UP.
+        # Set when the watchdog forces a release while the key still appears held.
+        # Auto-repeat keeps delivering KEY-DOWN in that state, and each one would
+        # read as a fresh press, looping dictations for as long as the key is
+        # down. Cleared by the next real KEY-UP.
         self._ignore_until_release = False
 
     # -- validation ----------------------------------------------------
@@ -237,14 +202,11 @@ class HotkeyListener:
         ).start()
 
         try:
-            # Only suppress the trigger key. Suppressing modifiers would break
-            # every other shortcut on the system.
-            # The handles these return are deliberately not kept. stop() calls
-            # unhook_all(), which is the blunter instrument and the correct one:
-            # its job is to guarantee that no key is left suppressed system-wide,
-            # and removing hooks one by one can miss one. A key that stays
-            # swallowed after quitting is a far worse outcome than being
-            # imprecise about hooks nothing else in this process installs.
+            # Only the trigger key is suppressed; suppressing modifiers would
+            # break every other shortcut on the system. The returned handles are
+            # dropped because stop() uses unhook_all(): removing hooks one at a
+            # time can miss one, and a key left swallowed after quitting is worse
+            # than being imprecise about hooks nothing else here installs.
             kb.on_press_key(self.trigger, self._trigger_down,
                             suppress=self.suppress)
             kb.on_release_key(self.trigger, self._trigger_up,
@@ -271,16 +233,13 @@ class HotkeyListener:
         except Exception:
             return False
 
-    # These run INSIDE the Windows hook. Keep them O(microseconds): no I/O,
-    # no audio, no locks held across slow work.
+    # These run inside the Windows hook. Keep them at microsecond cost: no I/O, no
+    # audio, no locks held across slow work.
     #
-    # The RETURN VALUE decides suppression. keyboard's listener does:
-    #     for key_hook in self.blocking_keys[scan_code]:
-    #         if not key_hook(event): return False
-    # so returning a falsy value swallows the key and True lets it through.
-    # This must be conditional: with a combo like ctrl+shift+space the trigger
-    # is "space", and unconditionally returning falsy would eat the spacebar
-    # system-wide. We only swallow the key when we actually consumed it.
+    # The return value decides suppression - keyboard's listener swallows the key
+    # on a falsy result and passes it on for True. It has to stay conditional:
+    # with ctrl+shift+space the trigger is "space", so returning falsy
+    # unconditionally would eat the spacebar system-wide.
 
     _PASS = True      # let the keystroke reach the focused app
     _EAT = False      # Casper Flow consumed it
@@ -289,9 +248,9 @@ class HotkeyListener:
         """
         True if this event is one we injected ourselves.
 
-        Consumes one of the expected events, so exactly the keystrokes we sent
-        are let through and nothing else. The deadline stops a replay that never
-        arrived from arming the guard indefinitely.
+        Consumes one expected event, so exactly the keystrokes we sent are let
+        through. The deadline stops a replay that never arrived from leaving the
+        guard armed indefinitely.
         """
         with self._replay_lock:
             if self._replay_pending <= 0:
@@ -310,9 +269,7 @@ class HotkeyListener:
             return self._PASS         # our own injected tap - let it do its job
         with self._lock:
             if self._ignore_until_release:
-                # Auto-repeat after a forced release. Waiting for a real KEY-UP
-                # rather than treating this as a new press.
-                return self._EAT
+                return self._EAT      # auto-repeat after a forced release
             if self._held:
                 return self._EAT      # auto-repeat of a hold we own
             if not self._mods_satisfied():
@@ -332,8 +289,8 @@ class HotkeyListener:
             latched = self._ignore_until_release
             self._ignore_until_release = False
         if latched:
-            # The release we were waiting for. Swallow it: its key-down was
-            # swallowed too, so passing this through would be an unpaired key-up.
+            # Swallowed because its key-down was too: passing it through would be
+            # an unpaired key-up.
             log.debug("Trigger released; auto-repeat suppression cleared")
             return self._EAT
         # Swallow the release only if we were the ones holding it.
@@ -341,12 +298,10 @@ class HotkeyListener:
 
     def _replay_tap(self):
         """
-        Re-send a tap we swallowed but did not use.
+        Re-send a tap that was swallowed but not used.
 
-        Without this, binding a key with suppression on removes that key from
-        the system for as long as Casper Flow runs. With Caps Lock as the
-        default that is very visible: the light flickers and the key stops
-        toggling. Runs on the worker thread, never inside the hook.
+        Without this, a suppressed binding removes the key from the system for as
+        long as Casper Flow runs. Runs on the worker thread, never in the hook.
         """
         if not self.suppress or not self._kb:
             return
@@ -361,23 +316,14 @@ class HotkeyListener:
         except Exception as e:
             log.debug(f"Could not replay {self.trigger!r}: {e}")
         finally:
-            # Disarm explicitly rather than letting the deadline lapse. Usually
-            # the keyboard package hides its own injected events entirely, so
-            # nothing consumes the count - and a guard left armed swallows the
-            # user's *next real* press. With a long window that is easy to hit:
-            # tap the key, start dictating within the window, and the dictation
-            # is silently ignored. Caught by tests/test_hotkey.py.
+            # Disarmed explicitly rather than left to lapse: the keyboard package
+            # usually hides its injected events, so nothing consumes the count and
+            # a guard left armed swallows the next real press.
             #
-            # The wait exists to give a late-delivered injected event time to
-            # arrive while the guard is still up, and it happens on a thread of
-            # its own rather than on the event worker.
-            #
-            # It used to block the worker, and that lost the start of dictations:
-            # the worker is what runs on_press, and on_press is what opens the
-            # recording. Tap the key and then immediately hold it to dictate - the
-            # natural thing to do after a tap does nothing - and the press sat in
-            # the queue behind this sleep, so capture began up to 120 ms late and
-            # the first word was clipped.
+            # On its own thread, not the event worker. The worker runs on_press,
+            # which opens the recording, so sleeping here delayed capture by up to
+            # _REPLAY_GRACE and clipped the first word of anyone who tapped the key
+            # and then immediately held it.
             threading.Thread(target=self._disarm_replay, daemon=True,
                              name="replay-disarm").start()
 
@@ -423,17 +369,16 @@ class HotkeyListener:
         Recover if a KEY-UP never arrives.
 
         Windows delivers events to a low-level hook one at a time, so a slow
-        handler could cause the release to be dropped. `_held` would then stay
-        True forever: every later press looks like auto-repeat and the mic keeps
-        recording. The event queue makes that unlikely; this is insurance.
+        handler can cause a release to be dropped, leaving _held True forever:
+        every later press reads as auto-repeat and the mic never stops. Insurance
+        behind the event queue.
 
-        Two strategies, because suppression changes what we can observe:
-          * suppress off -> GetAsyncKeyState tracks the hold exactly, so a
-            dropped release is detected within ~180 ms.
-          * suppress on  -> our own hook swallows the keydown before it reaches
-            the OS state table, so GetAsyncKeyState always reads "up" and cannot
-            be used. Fall back to a generous ceiling, which can't cut a real
-            dictation short but still bounds the damage.
+        Suppression changes what can be observed:
+          * suppress off -> GetAsyncKeyState tracks the hold, so a dropped release
+            is caught within ~180 ms.
+          * suppress on  -> our hook swallows the keydown before it reaches the OS
+            state table, so GetAsyncKeyState always reads up. Falls back to a
+            generous ceiling that cannot cut a real dictation short.
         """
         # Which keys can we actually observe?
         #   * modifiers are never suppressed, so for a combo we can always
@@ -465,7 +410,7 @@ class HotkeyListener:
                     misses = 0
                     continue
                 misses += 1
-                if misses >= 3:          # ~180 ms of confirmed physical release
+                if misses >= 3:          # ~180 ms of confirmed release
                     misses = 0
                     log.warning(
                         "Hotkey release was never delivered (the OS reports the "
@@ -480,8 +425,8 @@ class HotkeyListener:
                         f"(> max_hold_seconds={self.max_hold:.0f}) - forcing "
                         f"release; a KEY-UP was probably lost"
                     )
-                    # Before ending it, so no auto-repeat KEY-DOWN can slip in
-                    # between and be read as a new press.
+                    # Set first, so no auto-repeat KEY-DOWN can slip in between and
+                    # read as a new press.
                     with self._lock:
                         self._ignore_until_release = True
                     self._end_hold()

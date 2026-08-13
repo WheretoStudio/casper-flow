@@ -1,32 +1,15 @@
 """
-Text insertion at the current cursor position, via the Windows clipboard.
+Text insertion at the caret, via the Windows clipboard.
 
-Strategy:
   1. Snapshot the existing clipboard (all formats we can round-trip)
   2. Put our text on the clipboard
-  3. Release the hotkey's own modifier keys, then send Ctrl+V
+  3. Release the hotkey's own modifiers, then send Ctrl+V
   4. After a short delay, restore the snapshot
 
-**The user's clipboard is not ours to lose.** Someone dictating a reply has very
-likely got something they copied a minute ago sitting on the clipboard, and
-destroying it is a bug they will notice long after they could connect it to this
-app. Three rules follow, and each one is here because the code broke it:
-
-* EmptyClipboard() destroys *every* format, not just text. Snapshotting only
-  CF_UNICODETEXT means a copied image is silently lost, so we snapshot the
-  common binary formats too.
-* If the snapshot fails, we do not paste via the clipboard at all. Emptying a
-  clipboard we could not read is unrecoverable, and the code used to log a
-  warning and then do exactly that.
-* The whole sequence is serialised, restore included. The restore runs on a
-  timer, so two dictations in quick succession used to interleave - the second
-  snapshotting the first one's text and then "restoring" it over the user's
-  original data.
-
-If the hotkey is a combo (e.g. ctrl+shift+space), Shift may still be physically
-down when we send Ctrl+V - which the target app reads as Ctrl+Shift+V ("paste
-without formatting", or nothing at all). We release the hotkey's modifiers, and
-only those.
+The user's clipboard has to survive this, and EmptyClipboard() destroys every
+format rather than just text, so the snapshot covers the common binary formats
+too. Step 3 is for combo hotkeys: with ctrl+shift+space Shift may still be down,
+and the target app reads Ctrl+Shift+V.
 """
 
 import logging
@@ -36,32 +19,26 @@ from contextlib import contextmanager
 
 log = logging.getLogger("casper.paste")
 
-# Formats we can reliably read as str/bytes and write straight back.
-# CF_HDROP (copied files) is deliberately excluded: pywin32 hands it back as a
-# tuple of paths which cannot be re-set without building a DROPFILES struct.
+# Readable as str/bytes and writable straight back. CF_HDROP (copied files) is
+# excluded: pywin32 returns a tuple of paths, re-setting it needs a DROPFILES struct.
 _BINARY_FORMAT_NAMES = ("HTML Format", "Rich Text Format", "PNG", "image/png")
 
 _MODIFIERS = ("ctrl", "shift", "alt", "windows")
 
-# Held for the whole snapshot -> set -> paste -> restore sequence, which means it
-# is handed to the restore thread rather than released by the caller. The
-# clipboard is one global resource and the restore is deferred, so without this a
-# second dictation starting inside that window corrupts both.
+# Held across snapshot -> set -> paste -> restore. The clipboard is one global
+# resource and the restore is deferred, so ownership passes to the restore thread.
 _sequence_lock = threading.Lock()
 
-# If this is ever hit, something is wedged; typing the text is better than
-# refusing to paste for the rest of the session.
+# Seconds. If hit, something is wedged; typing beats refusing for the session.
 _LOCK_TIMEOUT = 8.0
 
 
 @contextmanager
 def _clipboard(timeout: float = 1.5):
     """
-    Open the clipboard with retries.
-
-    The clipboard is a single global resource; other apps (Office, browsers,
-    clipboard managers) hold it open for short bursts and OpenClipboard fails
-    with "Access is denied" if you don't retry.
+    Open the clipboard with retries. One global resource: Office, browsers and
+    clipboard managers hold it open in bursts and OpenClipboard then fails with
+    "Access is denied".
     """
     import win32clipboard
 
@@ -83,8 +60,7 @@ def _clipboard(timeout: float = 1.5):
         try:
             win32clipboard.CloseClipboard()
         except Exception as e:
-            # Worth a line: a clipboard left open blocks every other app on the
-            # machine from using it, so this is never merely cosmetic.
+            # A clipboard left open blocks every other app on the machine.
             log.warning(f"Could not close the clipboard: {e}")
 
 
@@ -119,9 +95,7 @@ def _snapshot_formats(wc, win32con):
 
 def paste_text(text: str, cfg: dict | None = None, hotkey_mods=None) -> bool:
     """
-    Insert `text` at the caret in whatever window has focus.
-
-    Returns True if the paste keystroke was sent.
+    Insert `text` at the caret in the focused window. True if Ctrl+V was sent.
     """
     if not text:
         return False
@@ -166,10 +140,8 @@ def _paste_win32(text: str, cfg: dict, hotkey_mods) -> bool:
                 saved = _snapshot_formats(wc, win32con)
             log.debug(f"Snapshotted {len(saved)} clipboard format(s)")
         except Exception as e:
-            # Do NOT continue to EmptyClipboard(). We could not read what is on
-            # the clipboard, so emptying it destroys it with nothing to put back,
-            # and the restore step would find an empty snapshot and leave our own
-            # text sitting there instead. Typing is slower and completely safe.
+            # Never fall through to EmptyClipboard(): with nothing read there is
+            # nothing to put back, and restore would leave our text there.
             log.warning(
                 f"Could not snapshot clipboard ({e}); typing this dictation "
                 f"instead, so nothing on the clipboard is lost"
@@ -191,10 +163,7 @@ def _paste_win32(text: str, cfg: dict, hotkey_mods) -> bool:
         try:
             keyboard.send("ctrl+v")
         except Exception as e:
-            # Leave our text on the clipboard and do not restore. The caller
-            # tells the user the text is on the clipboard so they can paste it
-            # themselves, and scheduling a restore here made that a lie - it
-            # wiped the text a fraction of a second later.
+            # No restore: the user is told the text is on the clipboard.
             log.error(
                 f"Could not send Ctrl+V ({e}); leaving the text on the clipboard "
                 f"so it can be pasted manually. The previous clipboard contents "
@@ -223,16 +192,12 @@ def _paste_win32(text: str, cfg: dict, hotkey_mods) -> bool:
 
 def _release_modifiers(keyboard, hotkey_mods):
     """
-    Send key-up for the hotkey's own modifiers, if they are still held.
+    Send key-up for the hotkey's own modifiers, if still held. Without this a combo
+    hotkey turns our Ctrl+V into Ctrl+Shift+V.
 
-    Without this, a combo hotkey turns our Ctrl+V into Ctrl+Shift+V / Ctrl+Alt+V.
-
-    Only the hotkey's modifiers, and this matters. Releasing every modifier that
-    happened to be down took keys away from the user: a held Shift is how you
-    extend a selection, a held Ctrl or Alt may be part of something the user is
-    doing in the target app, and for a modifier-based hotkey a forced release is
-    itself a key-up - which ends the dictation that is in progress. We only have a
-    reason to touch keys the hotkey put down.
+    Only the hotkey's own: a held Shift extends a selection, a held Ctrl or Alt may
+    belong to the target app, and for a modifier-based hotkey a forced release is a
+    key-up that ends the dictation in progress.
     """
     wanted = [m for m in dict.fromkeys(hotkey_mods) if m in _MODIFIERS]
     for mod in wanted:
@@ -248,14 +213,10 @@ def _foreground_looks_elevated() -> bool:
     """
     True if the focused window is probably a process we cannot send keys to.
 
-    User Interface Privilege Isolation silently discards synthetic input sent to a
-    higher-integrity process, so `keyboard.send` succeeds and nothing appears.
-    There is no way to ask whether the keystroke arrived, so this infers it: if we
-    cannot even open the foreground window's process for a limited-information
-    query, it is at a higher integrity level than we are.
-
-    Only ever used to explain a failure, never to decide whether to paste, so a
-    wrong answer costs at most one unnecessary log line.
+    UIPI discards synthetic input sent to a higher-integrity process: keyboard.send
+    succeeds and nothing appears, with no way to ask. Inferred from failing to open
+    the process even for a limited-information query. Only used to explain a
+    failure, so a wrong answer costs one log line.
     """
     try:
         import ctypes
@@ -286,20 +247,16 @@ def _foreground_looks_elevated() -> bool:
 
 def _schedule_restore(saved: dict, win32con, delay: float):
     """
-    Put the original clipboard back, on a background thread.
-
-    Takes ownership of `_sequence_lock` from the caller and releases it when the
-    restore is done, so the next dictation cannot start snapshotting until the
-    clipboard is back to what the user had.
+    Put the original clipboard back, on a background thread. Takes ownership of
+    _sequence_lock and releases it when done, so the next dictation cannot snapshot
+    a clipboard that is still ours.
     """
 
     def _restore():
         try:
             time.sleep(delay)
             if not saved:
-                # The clipboard was genuinely empty before we wrote to it, so
-                # there is nothing to put back and our text can stay. (A *failed*
-                # snapshot never reaches here - that path types instead.)
+                # Genuinely empty before we wrote, so our text can stay.
                 log.debug("Clipboard was empty before pasting; leaving our text")
                 return
             try:
@@ -320,19 +277,15 @@ def _schedule_restore(saved: dict, win32con, delay: float):
     threading.Thread(target=_restore, daemon=True, name="clipboard-restore").start()
 
 
-# Typing is roughly 200 characters a second, so a long dictation would hold the
-# keyboard for an uninterruptible age and land in whatever window gains focus
-# meanwhile. Past this we type a prefix and leave the rest on the clipboard.
+# Typing runs ~200 chars/sec, so a long dictation holds the keyboard for seconds
+# and spills into whatever window takes focus. Past this, type a prefix only.
 _MAX_TYPED_CHARS = 2000
 
 
 def _type_fallback(text: str) -> bool:
     """
-    Last resort: synthesise the keystrokes directly.
-
-    Used when the clipboard cannot be read or written. Slower and more fragile
-    than pasting, but it never destroys clipboard data, which is why the snapshot
-    failure path comes here rather than pressing on.
+    Last resort: synthesise the keystrokes, when the clipboard cannot be read or
+    written. Slower and more fragile, but it never destroys clipboard data.
     """
     try:
         import keyboard

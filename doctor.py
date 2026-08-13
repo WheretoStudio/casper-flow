@@ -1,11 +1,9 @@
 """
-Casper Flow self-check.
+Casper Flow self-check: dependencies, config, hotkey name, audio device,
+clipboard round-trip, the local Whisper model and any configured API keys.
 
-Verifies the install without needing you to speak into a microphone:
-dependencies, config validity, hotkey name, audio device, clipboard round-trip,
-the local Whisper model, and any configured API keys.
+    venv\\Scripts\\python.exe doctor.py
 
-Run:  venv\\Scripts\\python.exe doctor.py
 Exit code 0 = ready to use, 1 = at least one FAIL.
 """
 
@@ -18,8 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 
-# Library warnings (a model falling back, a device problem) are part of the
-# report, so send them to stdout with the rest of it rather than to stderr.
+# Library warnings are part of the report, so they go to stdout with it.
 try:
     if sys.stdout is not None:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -79,8 +76,8 @@ def check_deps():
     except Exception:
         record(WARN, "import requests", 'not installed - needed for ollama cleanup')
 
-    # Cloud clients are deliberately absent. Their presence is not a problem,
-    # but it is worth reporting so the privacy posture is visible.
+    # Their absence is expected, not an error. Reported either way so the privacy
+    # posture is visible.
     present = [m for m in ("openai", "groq", "anthropic")
                if importlib.util.find_spec(m) is not None]
     if present:
@@ -96,11 +93,9 @@ def check_deps():
 def check_config():
     section("Configuration")
 
-    # Before anything reads or writes settings. Casper Flow keeps settings.json,
-    # .env and casper.log beside the executable, so an install into a directory
-    # the user cannot write to loses every setting on restart - and the log
-    # handler is created at import time with no try/except, so the app exits with
-    # no window, no tray icon and nothing to look at. Worth one line here.
+    # Before anything reads or writes settings. settings.json, .env and casper.log
+    # live beside the executable, and the log handler is built at import time with
+    # no try/except, so an unwritable directory means the app exits with no window.
     try:
         from paths import DATA_DIR
         probe = DATA_DIR / ".casper-write-test"
@@ -119,9 +114,8 @@ def check_config():
         cfg = load_config()
         record(PASS, "settings.json parsed")
 
-        # A developer-only file, but it silently wins over the Settings window, so
-        # someone who switched language profile and saw no change deserves to be
-        # told why rather than concluding the model is bad.
+        # Developer-only file, but it wins over the Settings window, so a setting
+        # that will not stick needs an explanation here.
         if _config.LOCAL_OVERRIDES:
             record(WARN, "settings.local.json is overriding settings",
                    f"{_config.LOCAL_OVERRIDES} - changing these in the Settings "
@@ -145,15 +139,13 @@ def check_config():
     else:
         record(PASS, "multilingual model", f"{model} can handle code-mixed speech")
 
-    # A model fine-tuned for Hinglish needs the opposite advice from a general
-    # one, and both pieces of advice below were measured on a 30-recording
-    # corpus rather than assumed. See corpus/RESULTS.md.
+    # A Hinglish fine-tune needs the opposite advice from a general model. Both
+    # branches below are measured on the corpus - see corpus/RESULTS.md.
     tuned = any(t in model.lower() for t in ("hinglish", "swift"))
 
     prompt = str(cfg.get("initial_prompt") or "")
     if prompt:
-        # Sentence-shaped prompts get parroted back as transcripts when the
-        # audio is unclear. A word list is far safer.
+        # Sentence-shaped prompts get echoed back as transcripts on unclear audio.
         sentences = sum(prompt.count(c) for c in ".?!")
         if sentences >= 2 and "," not in prompt.split(".")[0]:
             record(WARN, "initial_prompt looks like sentences",
@@ -203,8 +195,7 @@ def check_config():
     else:
         record(PASS, "overlay", f"{style}, previews off")
 
-    # Previews only feed the caption style. Running them for the blob would spend
-    # CPU transcribing text that is never displayed.
+    # Previews only feed the caption style; elsewhere they transcribe for nothing.
     if cfg.get("live_preview") and style != "caption":
         record(WARN, "live_preview is on but the overlay shows no text",
                f"pill_style is {style!r}, which is driven by microphone level. "
@@ -246,10 +237,8 @@ def check_config():
         record(WARN, f"text cleanup via cloud ({lb})", state)
 
     # -- grammar and layout ---------------------------------------------
-    # Both are generative and both need a backend that can write. Silently doing
-    # nothing is the failure mode to avoid: the user turns on "Email" in the
-    # settings window, dictates, gets a plain sentence, and has no way to know
-    # why.
+    # Both are generative and need a backend that can write. The failure mode is
+    # silence: "Email" is on, the text comes back plain, and nothing says why.
     mode = str(cfg.get("format_mode", "plain"))
     grammar = bool(cfg.get("grammar_fix", False))
 
@@ -349,8 +338,7 @@ def check_audio(cfg):
                f"{e} - check Settings > Privacy & security > Microphone")
         return
 
-    # Open the stream briefly. Proves the device accepts our format and that
-    # microphone permission is granted, without recording anything meaningful.
+    # Proves the device accepts our format and that mic permission is granted.
     try:
         with sd.InputStream(
             samplerate=int(cfg.get("sample_rate", 16000)),
@@ -408,17 +396,12 @@ def check_clipboard():
 
 def _check_bundled_weights(size: str):
     """
-    Are these the weights the accuracy figures describe?
+    Check the installed weights against models/MODELS.lock.json.
 
-    Every number the product publishes - in Settings, in the installer, on the
-    website - is a cell in corpus/RESULTS.md, measured against specific files.
-    models/MODELS.lock.json records a SHA-256 for each of them, so that claim is
-    checkable rather than asserted. Reported here because "my dictation is worse
-    than advertised" and "these are not the advertised weights" are the same
-    question, and only this can tell them apart.
-
-    A WARN rather than a FAIL when the lock file is absent: it ships in the source
-    tree, not in the installer, so an installed user legitimately has no copy.
+    Every published accuracy figure was measured against these exact files, so
+    "worse than advertised" and "not the advertised weights" can be told apart.
+    A missing lock file is a WARN, not a FAIL: it ships in the source tree, not
+    in the installer.
     """
     import json
 
@@ -482,18 +465,15 @@ def check_model(cfg):
 
     size = cfg.get("whisper_model") or "swift-ct2"
 
-    # Resolve BEFORE loading. `_load_local` deliberately falls back to any model
-    # it can find rather than failing every dictation, so on its own it reports
-    # "loaded and cached" while the app is quietly running a different model than
-    # the user chose - which is the exact question this section exists to answer.
-    # Checking resolution separately is what distinguishes "installed" from
-    # "something loaded".
+    # Resolve before loading: _load_local falls back to any cached model rather
+    # than failing every dictation, so on its own it reports "loaded and cached"
+    # for a model the user never chose. This separates installed from loaded.
     resolved = resolve_model(size)
     if resolved != size:
         record(PASS, f"model '{size}' installed", f"{resolved}")
     else:
-        # resolve_model returns the name unchanged when it found nothing on disk,
-        # which means faster-whisper will treat it as a HuggingFace repo id.
+        # An unchanged name means nothing on disk, so faster-whisper will treat it
+        # as a HuggingFace repo id.
         bundled = sorted(p.name for p in MODELS_DIR.glob("*")
                          if (p / "model.bin").is_file()) if MODELS_DIR.is_dir() else []
         record(WARN, f"model '{size}' not installed locally",
@@ -509,10 +489,8 @@ def check_model(cfg):
         import transcribe
         actual = transcribe.loaded_model_name
         if actual and actual != size:
-            # The whole point of checking. _load_local substitutes a model it can
-            # find rather than failing every dictation, and says so only in the
-            # log, so without this doctor would print "ok" while the user dictates
-            # all day on a model they did not choose.
+            # The substitution is announced in the log and nowhere else, so it has
+            # to be a FAIL here.
             record(FAIL, f"local model '{size}'",
                    f"could not be loaded, so Casper Flow fell back to "
                    f"'{actual}'. Accuracy will not match what the model you "

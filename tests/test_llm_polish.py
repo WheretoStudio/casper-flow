@@ -1,14 +1,9 @@
 """
 The cleanup and formatting step.
 
-`rules` is the default backend and runs on every dictation, including as the
-fallback whenever a language model fails or is rejected. So almost every character
-this app ever pastes has been through `_rules`, which makes a bug here a bug in
-essentially all output.
-
-The guards are tested against what a real 3B model actually did, not against
-imagined misbehaviour. Every threshold in llm_polish.py exists because a measured
-failure got past the guard before it.
+`rules` is the default backend and the fallback whenever a language model fails
+or is rejected, so nearly everything this app pastes has been through `_rules`.
+Every guard threshold here comes from a measured failure of a real 3B model.
 """
 
 import time

@@ -1,20 +1,11 @@
 """
 System tray icon and menu (pystray + Pillow).
 
-Menu:
-  Casper Flow Enabled     (checkbox)
-  ------
-  Hotkey: [...]      (informational)
-  Backend: ...       (informational)
-  ------
-  Format as ->       (radio: Plain text / Message / Email)
-  ------
-  Launch at Login    (checkbox -> HKCU Run key)
-  Settings...            (opens the settings window)
-  Edit settings.json     (for people who prefer the file)
-  View log
-  ------
-  Quit Casper Flow
+Owns the enable toggle, the status lines, the format-mode radio group,
+launch-at-login (an HKCU Run key), and the entry points to the settings window,
+settings.json and the log.
+
+pystray runs its loop on the main thread, so anything that blocks needs a thread.
 """
 
 import logging
@@ -37,29 +28,19 @@ LOG_FILE = ROOT / "casper.log"
 APP_NAME = "Casper Flow"
 STARTUP_REG_KEY = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
 
-# Names this application used before it was called Casper Flow. A Run key written
-# under an old name keeps launching the app at login, but nothing in the current
-# product can see it: the tray toggle reads APP_NAME and reports "off" while the
-# app is in fact starting itself every morning, and the uninstaller deletes
-# APP_NAME and leaves the old value behind for ever.
-#
-# Found on the development machine, which still had a "VoxPad" entry pointing at
-# venv\Scripts\pythonw.exe main.py.
-#
-# One spelling is enough: registry value names are case-insensitive, verified by
-# looking up all three casings and getting the same single value back.
+# Product names used before the rename. A legacy Run key still launches the app,
+# but the toggle and the uninstaller only look at APP_NAME. Registry value names
+# are case-insensitive, so one spelling each is enough.
 LEGACY_APP_NAMES = ("VoxPad",)
 
 
 def _launcher_command() -> str:
     """
-    Build the command written to the Run key.
-
-    Uses pythonw.exe so logging in at boot doesn't pop a console window that
-    stays open for the life of the app.
+    Build the command written to the Run key. Prefers pythonw.exe so logging in
+    does not leave a console window open for the life of the app.
     """
     if FROZEN:
-        # sys.executable *is* the app. Passing a script path would be nonsense.
+        # sys.executable is the app itself, so there is no script path to pass.
         return f'"{Path(sys.executable)}"'
 
     exe = Path(sys.executable)
@@ -70,35 +51,23 @@ def _launcher_command() -> str:
     return f'"{exe}" "{Path(__file__).resolve().parent / "main.py"}"'
 
 
-# Shipped with the build, so it comes from the bundle when frozen. A copy dropped
-# beside the executable wins, which makes replacing the icon possible without a
-# rebuild.
+# From the bundle when frozen; a copy beside the executable wins.
 ICON_FILE = icon_file()
 
 def _tray_icon_px() -> int:
     """
-    The pixel size Windows wants for a notification icon.
+    The pixel size Windows wants for a notification icon, so the frame handed
+    over needs no rescaling.
 
-    Asked rather than assumed, so the frame handed over needs no rescaling. The
-    previous code resampled the 256 px frame down to 64 and let Windows shrink
-    that again: two resamples, and the frames drawn specifically for small sizes
-    were never used. On a 125% display that delivered a three-bar mark crushed
-    into 20 px.
-
-    Process DPI awareness is deliberately NOT changed here. It would make this
-    return the scaled value, but it is a process-wide setting that also changes
-    how window coordinates are interpreted - and the overlay positions itself
-    from screen metrics. A slightly soft tray icon is a fair trade for not
-    moving the recording indicator.
+    Do not set process DPI awareness here: it is process-wide and changes how
+    window coordinates are interpreted, and the overlay positions itself from
+    screen metrics.
     """
     try:
         import ctypes
-        # GetSystemMetrics(SM_CXSMICON) returns 16 in a DPI-unaware process even
-        # on a scaled display, and Windows then enlarges whatever it is given.
-        # GetDpiForSystem reports the real system DPI regardless of this
-        # process's awareness, so the scaled size can be derived without
-        # changing any process-wide state. 96 DPI is 100%, 120 is 125%, 144 is
-        # 150%; the base small-icon size is 16 px by definition.
+        # GetSystemMetrics(SM_CXSMICON) returns 16 in a DPI-unaware process even on
+        # a scaled display. GetDpiForSystem reports real system DPI regardless of
+        # awareness. 96 DPI is 100%; small icons are 16 px by definition.
         dpi = int(ctypes.windll.user32.GetDpiForSystem())
         if not 72 <= dpi <= 480:
             raise ValueError(f"implausible system DPI {dpi}")
@@ -118,13 +87,9 @@ def _make_icon(active: bool = True):
     """
     The tray icon, as a PIL image.
 
-    Prefers assets/casper.ico, which is the same mark used by the executable, the
-    installer and the website, so all four are recognisably one product. Falls
-    back to drawing a microphone if the asset is missing, because a tray app with
-    no icon is invisible and therefore unquittable.
-
-    When disabled the mark is desaturated rather than swapped for a different
-    shape: the tray should read as "same app, currently off".
+    Prefers assets/casper.ico, and draws a microphone if that is missing: a tray
+    app with no icon is invisible and so cannot be quit. Disabled desaturates the
+    mark rather than swapping the shape.
     """
     from PIL import Image, ImageDraw, ImageEnhance
 
@@ -134,7 +99,7 @@ def _make_icon(active: bool = True):
             want = _tray_icon_px()
             try:
                 available = sorted({w for w, _h in img.ico.sizes()})
-                # Exact frame if we drew one, otherwise the next size up so any
+                # Exact frame if there is one, else the next size up so any
                 # scaling Windows does is a reduction, never an enlargement.
                 pick = want if want in available else next(
                     (s for s in available if s >= want), available[-1])
@@ -175,8 +140,7 @@ class TrayApp:
     # -- launch at login ----------------------------------------------
 
     def _is_launch_at_login(self) -> bool:
-        # Done here because this is the first thing the menu asks, so the answer
-        # is correct the first time it is shown rather than after a restart.
+        # First thing the menu asks, so the checkbox is right on first display.
         self._migrate_legacy_autostart()
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, STARTUP_REG_KEY) as key:
@@ -193,13 +157,9 @@ class TrayApp:
         """
         Move a Run key written under an old product name onto the current one.
 
-        Migrated rather than deleted: the entry means the user once asked for
-        launch-at-login, and silently switching that off is as wrong as silently
-        leaving an invisible one behind. So if the old name is present and the
-        current one is not, the current one is written with today's command.
-
-        Returns the name it migrated, or None. Never raises - a registry quirk
-        must not stop the tray from starting.
+        The entry means the user asked for launch-at-login, so when the old name
+        is present and the current one is not, the current one is written with
+        today's command. Returns the migrated name, or None. Never raises.
         """
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, STARTUP_REG_KEY, 0,
@@ -271,11 +231,8 @@ class TrayApp:
 
     def _formatting_available(self) -> bool:
         """
-        Whether a backend that can actually write text is configured.
-
-        The menu entries are shown but disabled otherwise, rather than hidden.
-        A user who has read about the feature and cannot find it will assume it
-        is missing; a greyed-out entry says it exists and something is needed.
+        Whether a backend that can write text is configured. Callers grey the
+        format entries out rather than hiding them.
         """
         return str(self.cfg.get("llm_backend", "rules")).lower() != "rules"
 
@@ -283,8 +240,7 @@ class TrayApp:
         def setter(icon, item):
             self.cfg["format_mode"] = value
             log.info(f"Format mode set to {value!r}")
-            # Persisted, so the choice survives a restart - the same expectation
-            # the launch-at-login toggle sets.
+            # Persisted so the choice survives a restart.
             try:
                 from config import save_config
                 save_config(self.cfg)
@@ -298,11 +254,9 @@ class TrayApp:
 
     def _open_settings_window(self, icon, item):
         """
-        Open the settings window.
-
-        On its own thread with its own Tk root: pystray owns the main thread, and
-        the overlay already runs a Tk loop, so blocking either would freeze the
-        tray icon or the recording indicator.
+        Open the settings window on its own thread. pystray owns the main thread
+        and the overlay already runs a Tk loop; blocking either freezes the tray
+        icon or the recording indicator.
         """
         def worker():
             try:
@@ -370,8 +324,7 @@ class TrayApp:
             polish = "off"
         else:
             lb = self.cfg.get("llm_backend", "openai")
-            # Surface a missing key here rather than only in the log, otherwise
-            # "why is my text not cleaned up?" is invisible from the UI.
+            # Surfaced here too, or a skipped polish step has no visible cause.
             polish = lb if api_key_for(lb, self.cfg) else f"{lb} (no API key - skipped)"
 
         menu = Menu(
@@ -386,9 +339,7 @@ class TrayApp:
             Item(f"Transcribe: {backend} ({model})", None, enabled=False),
             Item(f"Polish: {polish}", None, enabled=False),
             Menu.SEPARATOR,
-            # Layout is switchable from here because people move between writing
-            # a message and writing an email several times an hour, and opening a
-            # settings window for that would mean nobody used it.
+            # Layout lives in the menu because it changes several times an hour.
             Item("Format as", Menu(*[
                 Item(
                     label,
