@@ -1,0 +1,223 @@
+@import "tailwindcss" source(none);
+@source "../src";
+
+@theme {
+  --font-sans:
+    "Instrument Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/*
+ * Design system.
+ *
+ * `@theme inline` maps the raw custom properties below onto Tailwind utility
+ * classes (--color-surface -> bg-surface, text-surface, border-surface).
+ * Every token declared here is used by the site; unused scaffolding tokens
+ * (charts, sidebar, popover, secondary, destructive) were removed along with
+ * the component library that needed them.
+ *
+ * Colors use oklch so lightness stays perceptually even across the palette.
+ *
+ * To add a semantic color: declare it in :root, then register it in
+ * `@theme inline` as --color-<name>: var(--<name>).
+ */
+
+@theme inline {
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent-soft: var(--accent-soft);
+  --color-surface: var(--surface);
+  --color-surface-deep: var(--surface-deep);
+  --color-surface-deep-foreground: var(--surface-deep-foreground);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-ring: var(--ring);
+}
+
+:root {
+  /* Lets block-size animate to and from `auto`, which is what makes the FAQ
+     accordion slide instead of snap. Ignored by engines that lack it, and the
+     accordion still works there — it just opens instantly. */
+  interpolate-size: allow-keywords;
+
+  --radius: 0.375rem;
+
+  /* Paper-warm neutrals: hue 60-85 keeps the page off-white rather than clinical. */
+  --background: oklch(0.982 0.006 85);
+  --foreground: oklch(0.19 0.008 60);
+  --card: oklch(0.995 0.003 85);
+  --primary: oklch(0.19 0.008 60);
+  --primary-foreground: oklch(0.985 0.005 85);
+  --muted-foreground: oklch(0.46 0.01 65);
+
+  /* Single accent, a burnt sienna. Used for the download CTA and inline marks. */
+  --accent: oklch(0.52 0.13 45);
+  --accent-foreground: oklch(0.99 0.005 85);
+  --accent-soft: oklch(0.94 0.03 60);
+
+  --surface: oklch(0.965 0.008 80);
+  --surface-deep: oklch(0.21 0.008 60);
+  --surface-deep-foreground: oklch(0.93 0.006 80);
+
+  --border: oklch(0.9 0.008 75);
+  --border-strong: oklch(0.82 0.01 75);
+  --ring: oklch(0.52 0.13 45);
+
+  /* Consumed through style={{ boxShadow: "var(--shadow-panel)" }} in visuals.tsx. */
+  --shadow-panel:
+    0 1px 2px oklch(0.19 0.008 60 / 0.06), 0 12px 32px -12px oklch(0.19 0.008 60 / 0.18);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  ::selection {
+    background: var(--accent-soft);
+    color: var(--foreground);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+
+  /*
+   * The focus ring on dark surfaces.
+   *
+   * --ring is the accent, a mid-lightness orange chosen against the light page.
+   * Against --surface-deep it lands close to the 3:1 floor for a non-text
+   * indicator, which for the one element that tells a keyboard user where they
+   * are is too close to call. The footer is full of links, so it gets a ring in
+   * the light foreground colour of that surface instead.
+   */
+  .bg-surface-deep :focus-visible,
+  footer :focus-visible {
+    outline-color: var(--surface-deep-foreground);
+  }
+}
+
+/*
+ * Scroll reveal: visible by default, JS opts in to the animated state.
+ *
+ * The mechanism is the `.js-reveal [data-reveal]` rules below - a class on <html>
+ * plus a data attribute per element, so nothing is hidden unless JavaScript is
+ * actually running to un-hide it. A `reveal` utility class used to be declared
+ * here as well and was never applied to anything.
+ */
+
+/*
+ * The overlay illustration breathes, because the real one does — it tracks your
+ * microphone level. A still image of it looks like a screenshot of a bug.
+ * Deliberately slow and small: 3.4s and 4%, enough to register as alive without
+ * pulling the eye away from the text beside it.
+ */
+@keyframes blob-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.92;
+  }
+  50% {
+    transform: scale(1.04);
+    opacity: 1;
+  }
+}
+
+@layer components {
+  .blob-pulse {
+    animation: blob-breathe 3.4s ease-in-out infinite;
+  }
+
+  /*
+   * Accordion chevron. Rotating a border-only square is one element instead of an
+   * icon import, and <details> gives us the open state for free with no JS.
+   */
+  .faq-chevron {
+    transition: transform 260ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
+  details[open] > summary .faq-chevron {
+    transform: rotate(45deg);
+  }
+  details[open] > summary {
+    color: var(--foreground);
+  }
+  /* Removes the default disclosure triangle in every engine. */
+  summary::-webkit-details-marker {
+    display: none;
+  }
+  summary {
+    list-style: none;
+  }
+
+  /* The answer slides rather than snapping. */
+  @supports (interpolate-size: allow-keywords) {
+    details.faq-item::details-content {
+      block-size: 0;
+      overflow: hidden;
+      transition:
+        block-size 320ms cubic-bezier(0.22, 0.61, 0.36, 1),
+        content-visibility 320ms allow-discrete;
+    }
+    details.faq-item[open]::details-content {
+      block-size: auto;
+    }
+  }
+}
+
+@layer components {
+  .js-reveal [data-reveal] {
+    opacity: 0;
+    transform: translateY(14px);
+    transition:
+      opacity 700ms cubic-bezier(0.22, 0.61, 0.36, 1),
+      transform 700ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    transition-delay: var(--reveal-delay, 0ms);
+    will-change: transform, opacity;
+  }
+
+  .js-reveal [data-reveal][data-shown="true"] {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .js-reveal [data-reveal] {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "//": [
+    "Vercel auto-detects TanStack Start and Nitro, so no build command or output",
+    "directory is needed - the nitro() plugin in vite.config.ts is what makes",
+    "that work. The framework is pinned anyway because this site lives in a",
+    "website/ subdirectory, which is the case Vercel's own docs call out as one",
+    "where detection can fail.",
+    "",
+    "The Vercel project's Root Directory must be set to 'website'. That is a",
+    "dashboard setting and cannot be committed, so it is recorded here.",
+    "",
+    "There are no environment variables. The site has no analytics, no server",
+    "secrets and no API calls, which is the point of it."
+  ],
+
+  "framework": "tanstack-start",
+
+  "redirects": [
+    {
+      "source": "/download",
+      "destination": "https://github.com/wheretostudio/casper-flow/releases/latest/download/CasperFlowSetup.exe",
+      "permanent": false
+    },
+    {
+      "source": "/download/portable",
+      "destination": "https://github.com/wheretostudio/casper-flow/releases/latest/download/CasperFlow-portable.zip",
+      "permanent": false
+    },
+    {
+      "source": "/download/checksums",
+      "destination": "https://github.com/wheretostudio/casper-flow/releases/latest/download/SHA256SUMS.txt",
+      "permanent": false
+    }
+  ],
+
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "X-Frame-Options", "value": "DENY" },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(), microphone=(), geolocation=()"
+        }
+      ]
+    },
+    {
+      "//": [
+        "The download routes are 307 redirects, so a crawler never receives a",
+        "document and never sees a noindex meta tag - the header is the only way",
+        "to say it. Without this, /download can be indexed as a page, and a",
+        "search result that fires a 234 MB download instead of showing a page is",
+        "a bad outcome for the visitor and for the site."
+      ],
+      "source": "/download(/.*)?",
+      "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow" }]
+    }
+  ]
+}

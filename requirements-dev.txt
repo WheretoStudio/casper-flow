@@ -1,0 +1,43 @@
+# Casper Flow - development and build dependencies
+#
+#   pip install -r requirements-dev.txt
+#
+# Not needed to run Casper Flow. These are for running the test suite and
+# producing a release build.
+
+-r requirements.txt
+
+# -- Tests --------------------------------------------------------------
+# Some tests need real hardware (a microphone, an interactive desktop that can
+# receive injected keystrokes) and skip themselves when it is absent, so the
+# same suite runs locally and on CI.
+pytest==8.4.2
+
+# -- Packaging ----------------------------------------------------------
+# Freezes the app into a --onedir bundle. Never --onefile: self-extraction at
+# runtime is among the strongest antivirus heuristics, and Defender already
+# treats keyboard-hook code as suspicious.
+pyinstaller==6.16.0
+
+# -- The speech models --------------------------------------------------
+# Get them with:
+#
+#   .\venv\Scripts\python.exe fetch_models.py
+#
+# That downloads base.en, converts the Hinglish model, and records both in
+# models/MODELS.lock.json. Run it once before a release build; build_installer.ps1
+# verifies against the lock file and refuses to ship weights that do not match.
+#
+# Converting needs torch and transformers, which are NOT listed below on purpose:
+# they are ~440 MB, they are used once, and they are needed by nobody who is only
+# running or testing the app. fetch_models.py prints this command when it needs
+# them. Install the CPU wheel explicitly - the default `pip install torch` on
+# Windows pulls the CUDA build, roughly ten times the size, for a job that only
+# reads weights off disk:
+#
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu transformers
+#
+# They can be uninstalled afterwards. The lock file means the conversion does not
+# have to be repeated, and publishing the converted model to HuggingFace would
+# remove the need for anyone else to do it at all - see CONVERTED_MIRROR in
+# fetch_models.py.

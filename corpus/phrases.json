@@ -1,0 +1,61 @@
+{
+  "//": [
+    "Reference corpus for measuring Hinglish accuracy.",
+    "",
+    "Every accuracy number quoted before this file existed came from an",
+    "English text-to-speech voice reading Roman Hinglish, because the",
+    "development machine has no Hindi voice. That proxy produced two wrong",
+    "conclusions. These phrases exist to be read by a real speaker.",
+    "",
+    "Categories are scored separately, because 'accuracy' hides the thing we",
+    "actually need to know. A model can look fine on average while being",
+    "unusable on mid-sentence switching, and a Hindi fine-tune can win overall",
+    "while quietly destroying English - which is the specific regression risk",
+    "when swapping the default model.",
+    "",
+    "Write what you SAID, not what you meant. If you misread a line, either",
+    "re-record it or edit the reference text to match.",
+    "",
+    "Recordings are NOT committed: they are your voice, and this is a public",
+    "repository. corpus/audio/ is git-ignored."
+  ],
+
+  "phrases": [
+    { "id": "cs01", "category": "code-switch", "text": "kal ek meeting hai client ke saath, please report bhej dena" },
+    { "id": "cs02", "category": "code-switch", "text": "aaj ka update ready hai kya, main office se nikal raha hoon" },
+    { "id": "cs03", "category": "code-switch", "text": "thoda check karke bata dena, deadline kal shaam tak hai" },
+    { "id": "cs04", "category": "code-switch", "text": "matlab yeh feature abhi kaam nahi kar raha hai" },
+    { "id": "cs05", "category": "code-switch", "text": "team ko bol dena ki demo postpone ho gaya hai" },
+    { "id": "cs06", "category": "code-switch", "text": "iska invoice already process ho gaya hai na" },
+    { "id": "cs07", "category": "code-switch", "text": "mujhe woh presentation ka final version chahiye" },
+    { "id": "cs08", "category": "code-switch", "text": "server down tha isliye deployment late ho gaya" },
+    { "id": "cs09", "category": "code-switch", "text": "please ek reminder set kar dena for tomorrow morning" },
+    { "id": "cs10", "category": "code-switch", "text": "budget approval pending hai finance team ke paas" },
+
+    { "id": "en01", "category": "english", "text": "are you listening to me, I can hear you clearly" },
+    { "id": "en02", "category": "english", "text": "the deposition is scheduled for Thursday morning" },
+    { "id": "en03", "category": "english", "text": "please send me the quarterly report before the review" },
+    { "id": "en04", "category": "english", "text": "I will follow up with the vendor later today" },
+    { "id": "en05", "category": "english", "text": "let us move the standup to eleven o'clock" },
+
+    { "id": "hi01", "category": "hindi", "text": "kal subah paanch baje nikalna hai" },
+    { "id": "hi02", "category": "hindi", "text": "mujhe yeh baat samajh nahi aayi" },
+    { "id": "hi03", "category": "hindi", "text": "woh file kahan rakhi hai" },
+
+    { "id": "nu01", "category": "numbers", "text": "meeting hai twenty fourth March ko sharp three thirty pm" },
+    { "id": "nu02", "category": "numbers", "text": "invoice amount is forty two thousand five hundred rupees" },
+    { "id": "nu03", "category": "numbers", "text": "mera number hai nine eight seven six five four three two one zero" },
+    { "id": "nu04", "category": "numbers", "text": "Q3 revenue target pandrah percent badha diya hai" },
+
+    { "id": "nm01", "category": "names", "text": "Priya ko bol dena ki Rohit ne approve kar diya" },
+    { "id": "nm02", "category": "names", "text": "Bangalore office se Sharma ji call karenge" },
+    { "id": "nm03", "category": "names", "text": "WhatsApp pe bhej dena, Gmail check nahi kar raha hoon" },
+
+    { "id": "fl01", "category": "filler", "text": "um so basically yeh wala approach better hai" },
+    { "id": "fl02", "category": "filler", "text": "uh mujhe lagta hai ki hum kal discuss kar sakte hain" },
+
+    { "id": "lg01", "category": "long", "text": "kal ki meeting mein humein pehle budget discuss karna hai phir timeline aur uske baad resource allocation dekhna hai" },
+    { "id": "lg02", "category": "long", "text": "client ne bola hai ki agar hum next week tak deliver kar dete hain to woh additional scope bhi de denge" },
+    { "id": "lg03", "category": "long", "text": "please ensure ki saare stakeholders ko invite bhej diya hai aur agenda circulate ho gaya hai before end of day" }
+  ]
+}

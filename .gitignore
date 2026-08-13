@@ -1,0 +1,62 @@
+# Secrets - never commit
+.env
+
+# Runtime
+casper.log
+
+# Corpus recordings are the user's own voice and this is a public repository.
+# The phrase list and the results table are committed; the audio is not.
+corpus/audio/
+
+# Speech model weights: 219 MB of binary, assembled by fetch_models.py. Not in
+# git because git is the wrong place for that, but models/MODELS.lock.json IS
+# committed - it records the source repository, revision and a SHA-256 for every
+# file, which is what makes the weights reproducible on another machine and lets
+# the build refuse to ship anything else.
+# `models/*` and not `models/`: git will not look inside an excluded directory, so
+# a negation under `models/` never takes effect. Excluding the contents leaves the
+# directory itself visible, which is what lets the lock file through.
+models/*
+!models/MODELS.lock.json
+
+# Scratch audio for bench_latency.py when no corpus exists yet.
+_clips/
+
+# PyInstaller output. Builds go outside the repository by default - see
+# build_installer.ps1 - because this tree lives in OneDrive, which tries to sync
+# half a gigabyte of build artefacts and locks files mid-build.
+dist/
+build/
+
+# Scratch files from local experiments. The leading underscore is the convention:
+# anything named _something is throwaway and is never committed.
+_*.txt
+_*.png
+_*.wav
+_*.py
+_*.sh
+_*.json
+install_log.txt
+*.wav
+
+# Local overrides of the shipped defaults
+settings.local.json
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+
+# Local settings overrides (uncomment if you don't want to share your config)
+# settings.json
+
+# Working documents. Kept locally by whoever is building this, deliberately
+# not published: internal planning, phase tracking, competitor notes and a
+# running list of what we got wrong. The product's own documentation is
+# README.md, and the measurements behind its claims are in corpus/.
+PLAN.md
+website/DESIGN-BRIEF.md

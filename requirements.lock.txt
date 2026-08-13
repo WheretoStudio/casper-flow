@@ -1,0 +1,65 @@
+﻿# Casper Flow - exact runtime versions
+#
+# The transitive closure of requirements.txt, pinned. Install it instead of
+# requirements.txt to reproduce the set of wheels this release was tested and
+# measured against:
+#
+#   .\venv\Scripts\python.exe -m pip install -r requirements.lock.txt
+#
+# Regenerate by resolving requirements.txt in a clean environment, never by
+# freezing a working one:
+#
+#   py -3.11 -m venv .lockenv
+#   .lockenv\Scripts\python.exe -m pip install -r requirements.txt
+#   .lockenv\Scripts\python.exe -m pip freeze > requirements.lock.txt
+#   # then put this header back
+#
+# That distinction is the whole point. This file was previously a `pip freeze` of
+# a development machine that had answered "y" to install.ps1's optional cloud
+# extras, so it pinned openai, groq, httpx, httpcore, pydantic and nine of their
+# dependencies - packages requirements.txt describes as deliberately absent, and
+# that casper.spec excludes from the build so the shipped binary cannot reach a
+# transcription API. Anyone following the README to "reproduce the exact versions"
+# was installing the opposite of what ships.
+#
+# Two things that look wrong here and are not:
+#
+#   av         a real dependency of faster-whisper, so pip installs it. It is kept
+#              OUT OF THE BUILD instead, by casper.spec's excludes plus the stub in
+#              hooks/rthook_no_av.py - 62.6 MB of FFmpeg to decode a WAV we wrote
+#              ourselves. Removing it here would just make pip resolve it again.
+#   setuptools pulled in transitively; not imported by the application.
+#
+# Build and test tooling is not here. requirements-dev.txt already pins pytest and
+# pyinstaller exactly, and torch/transformers are installed only to convert a model.
+PyYAML==6.0.3
+av==18.0.0
+certifi==2026.7.22
+cffi==2.1.1
+charset-normalizer==3.4.9
+colorama==0.4.6
+ctranslate2==4.8.1
+faster-whisper==1.2.1
+filelock==3.32.2
+flatbuffers==25.12.19
+fsspec==2026.7.0
+hf-xet==1.6.0
+huggingface_hub==0.36.2
+idna==3.18
+keyboard==0.13.5
+numpy==2.4.6
+onnxruntime==1.28.0
+packaging==26.3
+pillow==12.3.0
+protobuf==7.35.1
+pycparser==3.0
+pystray==0.19.5
+pywin32==312
+requests==2.34.2
+setuptools==65.5.0
+six==1.17.0
+sounddevice==0.5.5
+tokenizers==0.22.2
+tqdm==4.70.0
+typing_extensions==4.16.0
+urllib3==2.7.0

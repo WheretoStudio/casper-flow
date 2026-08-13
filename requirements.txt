@@ -1,0 +1,48 @@
+# Casper Flow - runtime dependencies
+#
+#   pip install -r requirements.txt
+#
+# Casper Flow is local-only by default: nothing here talks to a network service.
+# Speech recognition and text cleanup both run on your machine.
+#
+# Lower bounds are the oldest versions known to work. Use
+# requirements.lock.txt for the exact versions this was tested against.
+#
+# Everything below is on PyPI and permissively licensed (MIT/BSD/Apache-2.0/
+# LGPL). No accounts, no manual downloads, no build toolchain.
+
+# -- Core ---------------------------------------------------------------
+numpy>=1.24,<3            # audio buffers and image compositing
+sounddevice>=0.4.6        # microphone capture (bundles PortAudio)
+keyboard>=0.13.5          # global low-level hotkey hook, Ctrl+V synthesis
+pystray>=0.19.5           # system tray icon
+Pillow>=10.0              # tray icon and overlay rendering
+pywin32>=306              # clipboard save/restore via win32clipboard
+
+# -- Local speech recognition (offline, no API key) ---------------------
+# Downloads Whisper weights from HuggingFace on first run, then never needs
+# the network again. Weights are OpenAI's, released under MIT.
+#
+# This pulls in PyAV (`av`), which is FFmpeg and 62.6 MB, so that faster-whisper
+# can decode arbitrary audio files. Casper Flow does not use it: it records its
+# own 16 kHz mono WAV and decodes it with the standard library, and hands the
+# model a numpy array. PyAV is therefore **excluded from the shipped build** - see
+# casper.spec and hooks/rthook_no_av.py - but it stays installed here, because it
+# is what the verification script compares against to prove the two decoders agree
+# bit for bit.
+faster-whisper>=1.0.0
+
+# Text cleanup uses the built-in "rules" backend: no model, no network, no
+# extra dependency. For smarter local rewriting, install Ollama
+# (https://ollama.com) and set llm_backend to "ollama" - it runs on
+# localhost, so audio and text still never leave the machine. That path
+# needs `requests`:
+requests>=2.31
+
+# -- Cloud backends: NOT installed, and blocked by default ---------------
+# Casper Flow ships with offline_only=true, which refuses any backend that would
+# upload your audio or text. If you ever deliberately turn that off, install
+# whichever client you need:
+#   pip install openai      # transcribe_backend/llm_backend = "openai"
+#   pip install groq        # ... = "groq"
+#   pip install anthropic   # llm_backend = "anthropic"

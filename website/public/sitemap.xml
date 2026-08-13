@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  robots.txt explicitly welcomes Googlebot, Bingbot, Twitterbot and
+  facebookexternalhit, and used to point them at nothing at all.
+
+  Static rather than generated: this version of TanStack Start has no server-route
+  API in its published exports, and a sitemap that fails at request time is worse
+  than one that is edited by hand. The trade-off is that the origin below is
+  duplicated from SITE.domain in src/components/site/constants.ts - CI fails the
+  build if the two disagree, which is what keeps this honest.
+
+  Five routes. If you add a sixth, add it here. /download is deliberately absent:
+  it is a redirect to the release asset and is marked noindex.
+-->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://casperflow.app/</loc>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>https://casperflow.app/guide</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://casperflow.app/alternatives/wispr-flow</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://casperflow.app/privacy</loc>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
+  </url>
+  <url>
+    <loc>https://casperflow.app/terms</loc>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
+  </url>
+</urlset>

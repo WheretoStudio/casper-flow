@@ -1,0 +1,213 @@
+name: CI
+
+# Casper Flow is a Windows-only desktop app, so everything runs on a Windows
+# runner. Tests that need a microphone or an interactive desktop skip themselves
+# when the hardware is absent - see tests/conftest.py - which is why the same
+# suite runs here and locally.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # conftest.py reads this to skip tests that inject real keystrokes.
+  CI: "true"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Nothing here writes anything back. Stated explicitly so the job does not inherit
+# whatever the repository default happens to be, which for a public repo taking
+# pull requests is the token scope worth being deliberate about.
+permissions:
+  contents: read
+
+jobs:
+  app:
+    name: Desktop app
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Pinned: the release build has to be reproducible before SignPath
+          # will sign it.
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Compile every module
+        # -l keeps this to the top level, which is the application, and out of
+        # tests/ and website/. Deliberately not a hand-written list of modules:
+        # the previous list had drifted and omitted settings_ui.py and wizard.py,
+        # so the two newest windows in the app were the two nothing compiled.
+        #
+        # hooks/ is compiled separately because -l does not recurse into it, and
+        # the runtime hook is the one file whose failure mode is "the frozen app
+        # does not start at all".
+        run: |
+          python -m compileall -q -l .
+          python -m compileall -q hooks
+
+      - name: Tests
+        run: python -m pytest tests -v
+
+      # Proves the thing that actually ships, not just that the source compiles.
+      # Every packaging defect - a missing data file, a module PyInstaller could
+      # not see, a runtime hook that breaks the bootloader - is invisible to the
+      # steps above by construction.
+      #
+      # -SkipModels because the models are not in the repository, so a runner
+      # cannot assemble a complete payload. This checks the freeze and the launch;
+      # the release build on a machine with the models checks the rest.
+      - name: Freeze the app
+        run: pyinstaller casper.spec --noconfirm --clean --distpath dist --workpath build
+        shell: pwsh
+
+      - name: The frozen app starts
+        # Start-Process -Wait -PassThru rather than `& $exe` and $LASTEXITCODE.
+        # casper.spec builds with console=False, so CasperFlow.exe is a
+        # windowed-subsystem binary, and PowerShell does not wait for those: the
+        # call returns immediately and never sets $LASTEXITCODE. In this step
+        # nothing before it ran a native command, so $LASTEXITCODE was still
+        # $null, `$null -ne 0` was true, and the step threw on a build that had
+        # started perfectly well. Locally it did the opposite and passed
+        # unconditionally, because an earlier command in the shell had left
+        # $LASTEXITCODE at 0 - verified by probing `--set-profile`, which exits 2
+        # and was still reported as 0.
+        #
+        # -Wait actually waits, and .ExitCode is the process's own. Output is
+        # redirected to files and echoed only on failure, because a windowed
+        # build has no console attached and would otherwise fail with nothing to
+        # go on.
+        run: |
+          # Absolute paths: Start-Process resolves -Redirect* against the
+          # process working directory, not PowerShell's location, and those are
+          # not always the same.
+          $app = Join-Path $PWD "dist\CasperFlow"
+          $exe = Join-Path $app "CasperFlow.exe"
+          if (-not (Test-Path $exe)) { throw "PyInstaller produced no executable" }
+
+          $out = Join-Path $PWD "probe-out.txt"
+          $err = Join-Path $PWD "probe-err.txt"
+          $p = Start-Process -FilePath $exe -ArgumentList "--version" `
+            -Wait -PassThru -NoNewWindow `
+            -RedirectStandardOutput $out -RedirectStandardError $err
+
+          if ($p.ExitCode -ne 0) {
+            foreach ($f in @($out, $err, (Join-Path $app "casper.log"))) {
+              Write-Host "--- $f ---"
+              if (Test-Path $f) { Get-Content $f }
+            }
+            throw "frozen app exited $($p.ExitCode)"
+          }
+          Write-Host "Frozen app started and exited 0: $(Get-Content $out -Raw)"
+        shell: pwsh
+
+  website:
+    name: Website
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Pinned to the patch, not "22", because npm ships inside Node and
+          # `npm ci` refuses to run when the lockfile disagrees with what the
+          # current npm would resolve. "22" floated to 22.23.2 / npm 10.9.8, the
+          # lockfile had been written by npm 11, and the two disagree about
+          # optional peer dependencies: unstorage declares lru-cache ^11.2.6 as
+          # an optional peer, npm 11 leaves it out of the tree and npm 10 puts it
+          # in, so CI failed with "Missing: lru-cache@11.5.2 from lock file" on a
+          # lockfile that was correct for whoever generated it. The Python job
+          # pins 3.11 and pyinstaller==6.16.0 for the same reason.
+          #
+          # Bumping this means regenerating the lockfile with the npm that ships
+          # with the new version:
+          #
+          #   cd website
+          #   npx -y npm@<the new npm> install --package-lock-only
+          #
+          # Node 22.23.2 ships npm 10.9.8. Verified that a clean-room `npm ci`
+          # from the committed lockfile succeeds under both 10.9.8 (304 packages)
+          # and 11.13.0 (258, minus the optional peers it declines) - a lockfile
+          # that is a superset is fine, a lockfile that is missing an entry is
+          # what breaks.
+          node-version: "22.23.2"
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npx eslint .
+
+      - name: Build
+        run: npm run build
+
+      - name: No placeholders survive
+        shell: bash
+        run: |
+          # This used to warn and pass, because constants.ts genuinely still held
+          # `[PLACEHOLDER — ...]` values and a workflow that is red from its first
+          # run teaches everyone to ignore CI. Phase 5 filled them in, so it now
+          # fails - which is what turns "no placeholders ship" from an intention
+          # into a gate.
+          #
+          # -F and the opening bracket on purpose: a bare case-insensitive search
+          # for "placeholder" matches Tailwind's ::placeholder utilities and
+          # react-router's internal placeholderPrefix, and a check that cries wolf
+          # is worth nothing. Scans all of .output, not just public/, because this
+          # is a server-rendered site - the strings live in the server bundle.
+          # Captured into a variable rather than piped straight into `if`. The
+          # obvious `if grep ... | head -20; then` is always true, because a
+          # pipeline's status is the last command's and `head` always succeeds -
+          # so that spelling failed the build whether or not it found anything.
+          matches=$(grep -rF "[PLACEHOLDER" .output 2>/dev/null || true)
+          if [ -n "$matches" ]; then
+            echo "$matches" | head -20
+            echo "::error::Placeholder values reached the build output."
+            exit 1
+          fi
+          echo "No placeholders in build output."
+
+      - name: SEO assets are present and agree with each other
+        shell: bash
+        run: |
+          # Each of these was missing or wrong before Phase 5, and every one of
+          # them fails silently in production: a blank social card, a sitemap
+          # nobody can find, or a canonical URL pointing at the wrong origin.
+          for f in og.png favicon.ico robots.txt sitemap.xml; do
+            test -f ".output/public/$f" || { echo "::error::missing .output/public/$f"; exit 1; }
+          done
+
+          # public/sitemap.xml has to hardcode the origin, because this version of
+          # TanStack Start exposes no server-route API to generate it. That makes
+          # it the one place SITE.domain is duplicated, so it is checked rather
+          # than trusted.
+          domain=$(grep -oP 'domain:\s*"\K[^"]+' src/components/site/constants.ts)
+          test -n "$domain" || { echo "::error::could not read SITE.domain"; exit 1; }
+          if grep -q "<loc>" public/sitemap.xml && ! grep -q "$domain" public/sitemap.xml; then
+            echo "::error::sitemap.xml does not use SITE.domain ($domain)"
+            exit 1
+          fi
+          if ! grep -q "$domain/sitemap.xml" public/robots.txt; then
+            echo "::error::robots.txt does not point at $domain/sitemap.xml"
+            exit 1
+          fi
+          echo "SEO assets present; sitemap and robots.txt agree with SITE.domain ($domain)."

@@ -1,0 +1,23 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Dependencies
+node_modules
+
+# Build output (vite build -> .output, nitro intermediates -> .nitro/.tanstack)
+.output
+.nitro
+.tanstack/**
+
+# Local env overrides
+*.local
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.sw?
+Thumbs.db
