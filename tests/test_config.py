@@ -30,6 +30,20 @@ class TestRangeValidation:
         cfg = self._load({"transcribe_backend": "nonsense"}, tmp_path, monkeypatch)
         assert cfg["transcribe_backend"] == "local"
 
+    def test_bare_alt_hotkey_falls_back_to_caps_lock(self, tmp_path, monkeypatch):
+        """Otherwise Alt+Tab stops working for as long as the app runs."""
+        cfg = self._load({"hotkey": "alt"}, tmp_path, monkeypatch)
+        assert cfg["hotkey"] == "caps lock"
+
+    def test_ctrl_space_hotkey_is_kept(self, tmp_path, monkeypatch):
+        cfg = self._load({"hotkey": "ctrl+space"}, tmp_path, monkeypatch)
+        assert cfg["hotkey"] == "ctrl+space"
+
+    def test_rules_backend_does_not_need_a_key(self):
+        assert config.api_key_for("rules", {}) == "n/a"
+        assert config.api_key_for("ollama", {}) == "n/a"
+        assert config.api_key_for("openai", {}) == ""
+
     @staticmethod
     def _load(overrides: dict, tmp_path, monkeypatch) -> dict:
         settings = tmp_path / "settings.json"

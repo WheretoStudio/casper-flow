@@ -295,6 +295,14 @@ def _load_env():
 
 def _validate(cfg: dict) -> dict:
     """Clamp / correct obviously bad values so the app still starts."""
+    from hotkey import FALLBACK_HOTKEY, unsafe_bare_modifier
+
+    spec = str(cfg.get("hotkey", DEFAULTS["hotkey"]))
+    reason = unsafe_bare_modifier(spec)
+    if reason:
+        log.warning(reason + f" Falling back to {FALLBACK_HOTKEY!r}.")
+        cfg["hotkey"] = FALLBACK_HOTKEY
+
     tb = str(cfg.get("transcribe_backend", "local")).lower()
     if tb not in ("local", "groq", "openai"):
         log.warning(f"Invalid transcribe_backend {tb!r}; falling back to 'local'")
@@ -556,6 +564,7 @@ def api_key_for(backend: str, cfg: dict) -> str:
         "anthropic": cfg.get("anthropic_api_key", ""),
         "ollama": "n/a",   # local server, no key
         "local": "n/a",    # local model, no key
+        "rules": "n/a",    # built-in cleanup, no key
     }.get(backend, "")
 
 
