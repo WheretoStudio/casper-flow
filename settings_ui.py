@@ -106,6 +106,7 @@ class SettingsWindow:
         self.cfg = load_config()
         self._vars: dict[str, tk.Variable] = {}
         self._restart_needed = False
+        self._dirty = False
         # Only one Tk root can exist per process; a second one fails to start. A
         # caller may therefore pass an existing root, which is how tests drive
         # this window and the setup wizard in the same run.
@@ -118,6 +119,7 @@ class SettingsWindow:
         apply_window_icon(self.root)
 
         self._build()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # -- helpers -------------------------------------------------------
 
@@ -165,7 +167,7 @@ class SettingsWindow:
         bar = ttk.Frame(outer)
         bar.pack(fill="x", padx=10, pady=(0, 10))
         ttk.Button(bar, text="Save", command=self._save).pack(side="right")
-        ttk.Button(bar, text="Cancel", command=self.root.destroy).pack(
+        ttk.Button(bar, text="Cancel", command=self._cancel).pack(
             side="right", padx=6)
         ttk.Button(bar, text="Open settings file",
                    command=self._open_settings_file).pack(side="left")
@@ -179,17 +181,23 @@ class SettingsWindow:
         self._heading(f, "Push-to-talk key")
         row = ttk.Frame(f)
         row.pack(fill="x", padx=PAD)
+        current = str(self.cfg.get("hotkey", "caps lock"))
+        self._var("hotkey")  # so Save writes the key even if they never recapture
         self._hotkey_label = ttk.Label(
-            row, text=str(self.cfg.get("hotkey", "caps lock")).upper(),
+            row, text=current.upper(),
             font=("Consolas", 12, "bold"), relief="solid", padding=(10, 5))
         self._hotkey_label.pack(side="left")
         ttk.Button(row, text="Press a key to change...",
                    command=self._capture_hotkey).pack(side="left", padx=10)
         self._hint(f, "Hold this key to dictate. A quick tap still does whatever "
                       "the key normally does, so Caps Lock keeps working as Caps "
-                      "Lock.\n\nThe Fn key cannot be used: it is handled inside "
-                      "the keyboard and never reaches Windows, so no application "
-                      "can see it.")
+                      "Lock.\n\nDo not pick Alt, Ctrl, Shift or the Windows key "
+                      "on their own: Windows needs those for Alt+Tab, copy/paste "
+                      "and the Start menu.\n\nAfter you pick a key, click Save, "
+                      "then quit Casper from the tray and start it again. Closing "
+                      "this window without Save discards the new key.\n\nThe Fn "
+                      "key cannot be used: it is handled inside the keyboard and "
+                      "never reaches Windows, so no application can see it.")
 
         self._heading(f, "How long to hold")
         hold = self._var("min_hold_seconds", tk.DoubleVar)
@@ -243,9 +251,18 @@ class SettingsWindow:
                         "reaches Windows, so no application can detect it. "
                         "Pick another key.", parent=win)
                 else:
-                    self._vars["hotkey"] = tk.StringVar(value=name)
-                    self._hotkey_label.configure(text=name.upper())
-                    self._restart_needed = True
+                    from hotkey import normalise, unsafe_bare_modifier
+                    name = normalise(name)
+                    reason = unsafe_bare_modifier(name)
+                    if reason:
+                        messagebox.showwarning(
+                            "That key would break Windows shortcuts",
+                            reason, parent=win)
+                    else:
+                        self._vars["hotkey"] = tk.StringVar(value=name)
+                        self._hotkey_label.configure(text=name.upper())
+                        self._restart_needed = True
+                        self._dirty = True
                 win.after(500, win.destroy)
                 return
             win.after(80, poll)
@@ -566,7 +583,30 @@ class SettingsWindow:
         msg = "Saved."
         if self._restart_needed:
             msg += " Restart Casper Flow for the new hotkey to take effect."
+        self._dirty = False
         messagebox.showinfo("Saved", msg, parent=self.root)
+        self.root.destroy()
+
+    def _cancel(self):
+        if self._dirty and not messagebox.askyesno(
+                "Discard changes?",
+                "The dictation key you just picked will be lost.",
+                parent=self.root):
+            return
+        self.root.destroy()
+
+    def _on_close(self):
+        if self._dirty:
+            answer = messagebox.askyesnocancel(
+                "Save the new key?",
+                "You picked a new dictation key. Save it before closing?\n\n"
+                "After saving, quit Casper from the tray and start it again.",
+                parent=self.root)
+            if answer is None:
+                return
+            if answer:
+                self._save()
+                return
         self.root.destroy()
 
     # -- misc ----------------------------------------------------------

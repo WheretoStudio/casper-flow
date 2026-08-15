@@ -468,6 +468,17 @@ def main():
             "system tray, near the clock - you may need to click the ^ arrow). "
             "Exiting so the two copies don't both grab the hotkey."
         )
+        try:
+            ctypes.windll.user32.MessageBoxW(
+                None,
+                "Casper Flow is already running.\n\n"
+                "Look for the microphone icon near the clock "
+                "(click the ^ arrow if it is hidden).",
+                "Casper Flow",
+                0x40,  # MB_ICONINFORMATION
+            )
+        except Exception:
+            pass
         return
 
     cfg = load_config()

@@ -79,6 +79,43 @@ MODIFIERS = {"ctrl", "shift", "alt", "windows"}
 
 FALLBACK_HOTKEY = "caps lock"
 
+# A lone modifier with suppress_hotkey swallows that key for the whole session.
+# Alt+Tab, Ctrl+C and the Start menu then stop working. Combos are fine: only
+# the full combination is suppressed. right ctrl is the documented alternative
+# to Caps Lock and is not used for those shortcuts.
+_ALLOWED_BARE_MODIFIERS = {"right ctrl"}
+
+
+def unsafe_bare_modifier(spec: str) -> str | None:
+    """
+    If this hotkey would steal a system modifier, return a reason the user can
+    act on. Otherwise None.
+    """
+    mods, trigger = parse_hotkey(spec)
+    if mods:
+        return None
+    t = normalise(trigger)
+    if t in _ALLOWED_BARE_MODIFIERS:                                                    
+        return None
+    base = t
+    for prefix in ("left ", "right "):
+        if base.startswith(prefix):
+            base = base[len(prefix):]
+            break
+    if base not in MODIFIERS:
+        return None
+    stolen = {
+        "alt": "Alt+Tab",
+        "ctrl": "Ctrl+C and Ctrl+V",
+        "shift": "Shift (capitals)",
+        "windows": "the Start menu",
+    }.get(base, "system shortcuts")
+    return (
+        f"{trigger} is a modifier Windows uses for {stolen}. "
+        f"Using it as the dictation key would steal those shortcuts. "
+        f"Pick Caps Lock, Right Ctrl, or a combo such as ctrl+space."
+    )
+
 # Seconds a replayed keystroke may take to arrive back through our own hook, if it
 # arrives at all. Kept short: within this window the guard cannot tell an injected
 # event from a real keypress, so a genuine press here is swallowed and the
@@ -113,6 +150,11 @@ class HotkeyListener:
         self.max_hold = float(cfg.get("max_hold_seconds", 120))
 
         self.mods, self.trigger = parse_hotkey(self.hotkey)
+        reason = unsafe_bare_modifier(self.hotkey)
+        if reason:
+            log.warning(reason + f" Using [{FALLBACK_HOTKEY}] instead.")
+            self.hotkey = FALLBACK_HOTKEY
+            self.mods, self.trigger = parse_hotkey(FALLBACK_HOTKEY)
 
         self._held = False
         self._lock = threading.Lock()

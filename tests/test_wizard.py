@@ -118,3 +118,14 @@ class TestPracticeUsesTheRealPipeline:
             "the practice step must not put text in the box itself; the whole "
             "point is that a real dictation lands there"
         )
+
+
+class TestHotkeyStepRefusesSystemModifiers:
+    def test_capture_checks_unsafe_bare_modifier(self):
+        source = (wizard.__file__).replace(".pyc", ".py")
+        with open(source, encoding="utf-8") as fh:
+            text = fh.read()
+        assert "unsafe_bare_modifier" in text, (
+            "the wizard must refuse Alt/Ctrl/Shift/Windows as a lone hotkey, "
+            "or first-run setup can break Alt+Tab"
+        )

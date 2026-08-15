@@ -134,3 +134,9 @@ class TestCollect:
         import config
         unknown = sorted(set(win._collect()) - set(config.DEFAULTS))
         assert not unknown, f"window would write unknown keys: {unknown}"
+
+    def test_the_displayed_hotkey_is_included_in_what_save_would_write(self, win):
+        """Closing without this key in _vars used to leave the old hotkey on disk."""
+        out = win._collect()
+        assert "hotkey" in out
+        assert out["hotkey"]

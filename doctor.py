@@ -282,7 +282,7 @@ def check_hotkey(cfg):
     section("Hotkey")
     try:
         import keyboard as kb
-        from hotkey import parse_hotkey
+        from hotkey import parse_hotkey, unsafe_bare_modifier
     except Exception as e:
         record(FAIL, "hotkey check", str(e))
         return
@@ -299,6 +299,11 @@ def check_hotkey(cfg):
     if bad:
         record(FAIL, f"hotkey {spec!r}",
                f"unknown key name(s): {bad} - run pick_hotkey.py")
+        return
+
+    reason = unsafe_bare_modifier(spec)
+    if reason:
+        record(FAIL, f"hotkey {spec!r} steals a system modifier", reason)
         return
 
     record(PASS, f"hotkey {spec!r}", f"resolves to [{combo}], hold-to-talk")

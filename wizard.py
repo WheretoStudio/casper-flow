@@ -307,6 +307,12 @@ class Wizard:
                     text="That key never reaches Windows. Try another one.",
                     foreground="#c33")
                 return
+            from hotkey import normalise, unsafe_bare_modifier
+            name = normalise(name)
+            reason = unsafe_bare_modifier(name)
+            if reason:
+                self.key_status.configure(text=reason, foreground="#c33")
+                return
             self.result["hotkey"] = name
             self.key_lbl.configure(text=name.upper())
             self.key_status.configure(text=f"Set to {name.upper()}.",

@@ -70,6 +70,43 @@ class TestHotkeyParsing:
         assert mods == []
 
 
+class TestBareModifiersAreRefused:
+    """A lone Alt/Ctrl/Shift/Windows key steals OS shortcuts (Alt+Tab, Ctrl+C)."""
+
+    def test_alt_alone_is_unsafe(self):
+        from hotkey import unsafe_bare_modifier
+        reason = unsafe_bare_modifier("alt")
+        assert reason is not None
+        assert "Alt+Tab" in reason
+
+    def test_ctrl_and_shift_and_windows_are_unsafe(self):
+        from hotkey import unsafe_bare_modifier
+        assert unsafe_bare_modifier("ctrl") is not None
+        assert unsafe_bare_modifier("left ctrl") is not None
+        assert unsafe_bare_modifier("shift") is not None
+        assert unsafe_bare_modifier("windows") is not None
+
+    def test_right_ctrl_is_allowed(self):
+        from hotkey import unsafe_bare_modifier
+        assert unsafe_bare_modifier("right ctrl") is None
+
+    def test_combos_and_caps_lock_are_allowed(self):
+        from hotkey import unsafe_bare_modifier
+        assert unsafe_bare_modifier("ctrl+space") is None
+        assert unsafe_bare_modifier("alt+space") is None
+        assert unsafe_bare_modifier("caps lock") is None
+
+    def test_listener_falls_back_instead_of_binding_alt(self):
+        from hotkey import FALLBACK_HOTKEY, HotkeyListener
+        hk = HotkeyListener(
+            {"hotkey": "alt", "suppress_hotkey": True},
+            on_press=lambda: None,
+            on_release=lambda discard=False: None,
+        )
+        assert hk.hotkey == FALLBACK_HOTKEY
+        assert hk.trigger == "caps lock"
+
+
 @needs_desktop
 @needs_app_not_running
 class TestCapsLockSurvives:

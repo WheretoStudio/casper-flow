@@ -77,6 +77,53 @@ class TestOfflineOnlyGate:
         assert "rules" not in llm_polish.CLOUD_BACKENDS
 
 
+class TestTranscribeOfflineOnlyGate:
+    """Same promise as polish, for the path that actually uploads audio."""
+
+    @pytest.fixture
+    def spy(self, monkeypatch):
+        called: list[str] = []
+        monkeypatch.setattr(
+            transcribe, "_transcribe_local",
+            lambda *a, **k: (called.append("local"), "ok")[1],
+        )
+        monkeypatch.setattr(
+            transcribe, "_transcribe_groq",
+            lambda *a, **k: (called.append("groq"), "LEAKED OFF MACHINE")[1],
+        )
+        monkeypatch.setattr(
+            transcribe, "_transcribe_openai",
+            lambda *a, **k: (called.append("openai"), "LEAKED OFF MACHINE")[1],
+        )
+        return called
+
+    @pytest.mark.parametrize("backend", ["groq", "openai"])
+    def test_cloud_transcribe_is_never_called_when_offline_only(self, spy, backend):
+        from pathlib import Path
+        out = transcribe.transcribe(
+            Path("unused.wav"),
+            {"offline_only": True, "transcribe_backend": backend},
+        )
+        assert spy == ["local"], f"{backend} ran despite offline_only"
+        assert out != "LEAKED OFF MACHINE"
+
+    def test_gate_defaults_to_on_when_the_key_is_absent(self, spy):
+        from pathlib import Path
+        transcribe.transcribe(
+            Path("unused.wav"),
+            {"transcribe_backend": "groq"},
+        )
+        assert spy == ["local"]
+
+    def test_cloud_transcribe_is_reachable_once_the_gate_is_turned_off(self, spy):
+        from pathlib import Path
+        transcribe.transcribe(
+            Path("unused.wav"),
+            {"offline_only": False, "transcribe_backend": "groq"},
+        )
+        assert spy == ["groq"]
+
+
 class TestPromptsAreWordListsEverywhere:
     """
     Any prompt our own tooling can write into settings.json must be a word list.

@@ -34,6 +34,18 @@ STARTUP_REG_KEY = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
 LEGACY_APP_NAMES = ("VoxPad",)
 
 
+def polish_menu_label(cfg: dict) -> str:
+    """Status line for the tray. Must not say skipped when the rules backend ran."""
+    if not cfg.get("llm_polish"):
+        return "off"
+    lb = str(cfg.get("llm_backend", "rules")).lower()
+    if lb == "rules":
+        return "built-in cleanup"
+    if api_key_for(lb, cfg):
+        return lb
+    return f"{lb} (no API key - skipped)"
+
+
 def _launcher_command() -> str:
     """
     Build the command written to the Run key. Prefers pythonw.exe so logging in
@@ -320,12 +332,7 @@ class TrayApp:
             self.cfg.get("whisper_model", "small") if backend == "local"
             else self.cfg.get(f"{backend}_whisper_model", "")
         )
-        if not self.cfg.get("llm_polish"):
-            polish = "off"
-        else:
-            lb = self.cfg.get("llm_backend", "openai")
-            # Surfaced here too, or a skipped polish step has no visible cause.
-            polish = lb if api_key_for(lb, self.cfg) else f"{lb} (no API key - skipped)"
+        polish = polish_menu_label(self.cfg)
 
         menu = Menu(
             Item(

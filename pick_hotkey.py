@@ -113,6 +113,11 @@ def main():
         if not seen_any:
             print("Casper Flow received no key events at all. If you were pressing Fn,")
             print("that key never reaches Windows - try Caps Lock or Right Ctrl.")
+        else:
+            print("Only modifier keys were held (Alt, Ctrl, Shift or Windows).")
+            print("A modifier by itself cannot be the dictation key - it would")
+            print("steal Alt+Tab, copy/paste or the Start menu.")
+            print("Try Caps Lock, Right Ctrl, or a modifier plus another key.")
         return 1
 
     # ---- advice -----------------------------------------------------
@@ -131,6 +136,12 @@ def main():
         print(f"WARNING: '{trigger}' on its own is a key you type with.")
         print("         Casper Flow would swallow it. Add a modifier, e.g.")
         print(f"         ctrl+{trigger}")
+
+    from hotkey import unsafe_bare_modifier
+    reason = unsafe_bare_modifier(spec)
+    if reason:
+        print(f"\nRefusing to save. {reason}")
+        return 1
 
     # ---- save -------------------------------------------------------
     try:
